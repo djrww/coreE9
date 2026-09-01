@@ -1,0 +1,25 @@
+[package]
+name = "cl0r0"
+version = "0.1.0"
+edition = "2021"
+description = "CL0/R0 dual carrier: surface syntax trees, nine laws (L1-L9), mechanical self-verification"
+license = "MIT"
+
+[lib]
+name = "cl0r0"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cl0r0"
+path = "src/bin/cl0r0.rs"
+
+[[bin]]
+name = "l9newman"
+path = "src/bin/l9newman.rs"
+
+[[bin]]
+name = "fuzz"
+path = "src/bin/fuzz.rs"
+
+[profile.release]
+debug = true
