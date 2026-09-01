@@ -23,3 +23,7 @@ path = "src/bin/fuzz.rs"
 
 [profile.release]
 debug = true
+# PGO + LTO 優化(LTO 固化在 profile;PGO 由 RUSTFLAGS 驅動兩輪構建)
+lto = "fat"
+codegen-units = 1
+opt-level = 3

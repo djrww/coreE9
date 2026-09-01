@@ -11,16 +11,19 @@
 
 use crate::edit::Edit;
 
+/// 確定性 xorshift64 生成器(屬性測試的輸入宇宙;同種子 ⇒ 完全可重現)。
 pub struct Rng {
     state: u64,
 }
 
 impl Rng {
+    /// 以種子構造生成器;0 規範化為 1(xorshift 狀態不可為 0)。
     pub fn new(seed: u64) -> Rng {
         Rng { state: seed.max(1) }
     }
 
-    pub fn next(&mut self) -> u64 {
+    /// 下一個 u64(原生 xorshift64,零依賴)。
+    pub fn next_u64(&mut self) -> u64 {
         // xorshift64
         let mut x = self.state;
         x ^= x << 13;
@@ -30,18 +33,21 @@ impl Rng {
         x
     }
 
+    /// [0, n) 均勻整數(n = 0 時回 0)。
     pub fn below(&mut self, n: u64) -> u64 {
         if n == 0 {
             0
         } else {
-            self.next() % n
+            self.next_u64() % n
         }
     }
 
+    /// 以機率 num/den 回 true。
     pub fn chance(&mut self, num: u64, den: u64) -> bool {
         self.below(den) < num
     }
 
+    /// 均勻選取切片中的一個元素(借用返回;生成器的關鍵隨機原語)。
     pub fn pick<'a, T>(&mut self, xs: &'a [T]) -> &'a T {
         &xs[self.below(xs.len() as u64) as usize]
     }
@@ -79,7 +85,7 @@ fn gen_item(rng: &mut Rng, out: &mut String, depth: usize) {
         if rng.chance(1, 3) {
             out.push_str(": ");
             if rng.chance(1, 2) {
-                out.push_str("&");
+                out.push('&');
                 if rng.chance(1, 2) {
                     out.push_str("mut ");
                 }
@@ -229,7 +235,7 @@ fn gen_primary(rng: &mut Rng, out: &mut String, depth: usize) {
             if depth < 3 {
                 gen_block(rng, out, depth);
             } else {
-                out.push_str("1");
+                out.push('1');
             }
         }
     }

@@ -53,57 +53,106 @@ args     = expr { "," expr } ;
    3. 無生命週期 `'a`(raw string 內部除外)。                              *)
 "#;
 
+/// R₀(Rust 實用子集,附錄 B / §7.2)的詞法單元種類。
+/// 覆蓋面契約之外的語法由 `r0_parse` 如實申報 `unsupported`(§9 非目標)。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum R0TokKind {
+    /// 識別字(r# 前綴的 raw ident 不屬於 R₀)。
     Ident,
+    /// 十進制整數字面量。
     Number,
+    /// 關鍵字 `fn`。
     Fn,
+    /// 關鍵字 `struct`。
     Struct,
+    /// 關鍵字 `let`。
     Let,
+    /// 關鍵字 `mut`。
     Mut,
+    /// 關鍵字 `if`。
     If,
+    /// 關鍵字 `else`。
     Else,
+    /// 關鍵字 `while`。
     While,
+    /// 關鍵字 `loop`。
     Loop,
+    /// 關鍵字 `return`。
     Return,
+    /// 字面量 `true`。
     True,
+    /// 字面量 `false`。
     False,
+    /// `&`(共享借用)。
     Amp,
+    /// `&mut`(可變借用;兩個 token 的詞法合併,非 `&`+`mut`)。
     AmpMut,
+    /// `*`(解引用)。
     Star,
+    /// `+`。
     Plus,
+    /// `-`。
     Minus,
+    /// `=`(賦值/綁定)。
     Eq,
+    /// `==`(相等)。
     EqEq,
+    /// `!=`(不等)。
     NotEq,
+    /// `<`。
     Lt,
+    /// `<=`。
     Le,
+    /// `>`。
     Gt,
+    /// `>=`。
     Ge,
+    /// `&&`(邏輯與)。
     AndAnd,
+    /// `||`(邏輯或)。
     OrOr,
+    /// `!`(邏輯非)。
     Not,
+    /// `.`(字段訪問)。
     Dot,
+    /// `;`。
     Semi,
+    /// `:`(類型標註)。
     Colon,
+    /// `,`。
     Comma,
+    /// `(`。
     LParen,
+    /// `)`。
     RParen,
+    /// `{`。
     LBrace,
+    /// `}`。
     RBrace,
+    /// `[`(索引左界)。
     LBrack,
+    /// `]`(索引右界)。
     RBrack,
+    /// `->`(返回類型箭頭)。
     Arrow,
+    /// raw string 字面量 `r#"…"#`(R₀ 唯一的面板式詞法項)。
     RawString,
+    /// `/`(整除,非註釋;R₀ 註釋以標準 `//` 詞法處理)。
     Slash,
+    /// `%`(取模)。
     Percent,
+    /// 空白與 `//` 註釋(平鋪保留,不進 R₀ 樹)。
     Trivia,
+    /// 詞法錯誤字元(仍佔一個平鋪 token ⇒ 全化)。
     Bad,
 }
 
+/// R₀ 詞法單元:種類 + 源碼跨度。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct R0Token {
+    /// 單元種類。
     pub kind: R0TokKind,
+    /// 半開跨度 [start, end)。
     pub span: Span,
 }
 
@@ -427,17 +476,16 @@ pub fn unsupported(src: &str) -> Vec<(&'static str, Span)> {
     let mut from = 0;
     let bytes = src.as_bytes();
     while from < bytes.len() {
-        if bytes[from] == b'\'' {
-            if from + 1 < bytes.len()
-                && (bytes[from + 1].is_ascii_alphabetic() || bytes[from + 1] == b'_')
-            {
-                out.push((
-                    "生命週期 `'a`(排除)",
-                    Span::new(from as u32, (from + 2) as u32),
-                ));
-                from += 2;
-                continue;
-            }
+        if bytes[from] == b'\''
+            && from + 1 < bytes.len()
+            && (bytes[from + 1].is_ascii_alphabetic() || bytes[from + 1] == b'_')
+        {
+            out.push((
+                "生命週期 `'a`(排除)",
+                Span::new(from as u32, (from + 2) as u32),
+            ));
+            from += 2;
+            continue;
         }
         from += 1;
     }

@@ -14,17 +14,25 @@
 use crate::parse::{Kind, Tree};
 use crate::span::Span;
 
+/// 事件種類:對某個綁定的訪問/操作(§3.2 事實層的原子)。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum EvKind {
+    /// 綁定聲明(定義點)。
     Decl,
+    /// 讀取(僅使用)。
     Read,
+    /// 移動(所有權轉移)。
     Move,
+    /// 共享借用 `&x`。
     BorrowSh,
+    /// 可變借用 `&mut x`。
     BorrowMut,
+    /// 解引用 `*x`。
     Deref,
 }
 
 impl EvKind {
+    /// 事件的顯示標簽(診斷輸出用)。
     pub fn label(self) -> &'static str {
         match self {
             EvKind::Decl => "decl",
@@ -37,14 +45,19 @@ impl EvKind {
     }
 }
 
+/// liveness 三軌(§3.2):同一棵樹、三種活躍區間語義。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Track {
+    /// lexical:綁定存活到其作用域(block)末端。
     Lexical,
+    /// nll:非詞法生命週期(killer = 覆蓋的聲明 / 移動)。
     Nll,
+    /// referent:以借用鏈的**源綁定**為參照(refer 軌)。
     Referent,
 }
 
 impl Track {
+    /// 軌道的顯示標簽。
     pub fn label(self) -> &'static str {
         match self {
             Track::Lexical => "lexical",
@@ -55,36 +68,55 @@ impl Track {
 }
 
 #[derive(Clone, Debug)]
+/// 一個綁定(變量聲明):名字、聲明跨度、可變性、是否形參、作用域。
 pub struct Binding {
+    /// 綁定名。
     pub name: String,
+    /// 綁定聲明的跨度。
     pub span: Span,
+    /// 是否 `mut`(可變綁定 ⇒ `&mut` 合法)。
     pub mutable: bool,
+    /// 是否為函數形參(參數作用域 = 函數體)。
     pub is_param: bool,
     /// 綁定所在作用域(最內層 block 的跨度)—— lexical 軌的端點來源。
     pub scope: Span,
 }
 
+/// 一個訪問事件(事實層):哪個綁定、什麼操作、在哪。
 #[derive(Clone, Debug)]
 pub struct Event {
+    /// 事件的綁定索引(facts.bindings 下標;referent 軌會重定向)。
     pub binding: usize,
+    /// 事件種類。
     pub kind: EvKind,
+    /// 事件在源碼中的跨度。
     pub span: Span,
 }
 
 /// `let r = &x;`(或 `&mut x`)—— 借用鏈:refer 綁定 → 源綁定。
+/// 借用鏈 `let r = &x;`:refer 綁定 → 源綁定(§3.2 referent 軌的拓撲)。
 #[derive(Clone, Debug)]
 pub struct BorrowLink {
+    /// 引用綁定(refer)的索引。
     pub ref_binding: usize,
+    /// 被引用綁定(源)的索引。
     pub src_binding: usize,
-    pub kind: EvKind, // BorrowSh | BorrowMut
+    /// 借用種類(BorrowSh 或 BorrowMut)。
+    pub kind: EvKind,
+    /// 鏈的跨度(整條 let 語句)。
     pub span: Span,
 }
 
+/// 事實層輸出(§3.2):綁定表 + 事件表 + 借用鏈 + 錯誤標記。
 #[derive(Clone, Debug)]
 pub struct Facts {
+    /// 全部綁定(按聲明順序)。
     pub bindings: Vec<Binding>,
+    /// 全部訪問事件。
     pub events: Vec<Event>,
+    /// 全部借用鏈。
     pub links: Vec<BorrowLink>,
+    /// 樹中是否存在 ERROR 區域(有則 liveness 分析降級為保守)。
     pub has_error_regions: bool,
 }
 
@@ -99,15 +131,15 @@ pub fn conflicts(k1: EvKind, k2: EvKind) -> bool {
     if b as u8 > a as u8 {
         std::mem::swap(&mut a, &mut b);
     }
-    match (a, b) {
+    matches!(
+        (a, b),
         (EvKind::BorrowMut, EvKind::BorrowMut)
-        | (EvKind::BorrowMut, EvKind::BorrowSh)
-        | (EvKind::BorrowMut, EvKind::Read)
-        | (EvKind::BorrowMut, EvKind::Move)
-        | (EvKind::BorrowMut, EvKind::Deref)
-        | (EvKind::BorrowSh, EvKind::Move) => true,
-        _ => false,
-    }
+            | (EvKind::BorrowMut, EvKind::BorrowSh)
+            | (EvKind::BorrowMut, EvKind::Read)
+            | (EvKind::BorrowMut, EvKind::Move)
+            | (EvKind::BorrowMut, EvKind::Deref)
+            | (EvKind::BorrowSh, EvKind::Move)
+    )
 }
 
 /// 從 CST 抽取事實層(具名節點樹上的結構遞歸;ERROR 區域不產事實,如實申報)。
@@ -135,7 +167,7 @@ fn lookup<'a>(scopes: &'a [Vec<usize>], facts: &'a Facts, name: &str) -> Option<
     None
 }
 
-fn child_of_kind<'a>(t: &'a Tree, node: u32, kind: Kind) -> Option<u32> {
+fn child_of_kind(t: &Tree, node: u32, kind: Kind) -> Option<u32> {
     t.node(node)
         .children
         .iter()
@@ -203,9 +235,7 @@ fn collect_decls(
                     Kind::IfStmt | Kind::WhileStmt => {
                         // if / while 的子塊
                         for cc in t.node(c).children.clone() {
-                            if t.node(cc).kind == Kind::Block {
-                                collect_decls(t, cc, facts, scopes, false);
-                            } else if t.node(cc).kind == Kind::IfStmt {
+                            if matches!(t.node(cc).kind, Kind::Block | Kind::IfStmt) {
                                 collect_decls(t, cc, facts, scopes, false);
                             }
                         }
@@ -437,12 +467,8 @@ impl<'a> EventCollector<'a> {
                             }
                             self.walk_node(c, Ctx::CallArg);
                         }
-                        Kind::Ident => {
-                            if first {
-                                first = false; // callee
-                            } else {
-                                // 不太可能(參數一定是 Expr)
-                            }
+                        Kind::Ident if first => {
+                            first = false; // callee
                         }
                         _ => {}
                     }
@@ -489,13 +515,17 @@ fn name_of(t: &Tree, node: u32) -> String {
 // 三軌 liveness 與衝突圖
 // ===========================================================================
 
+/// 活躍區間(半開)—— §3.3 衝突圖的頂點幾何。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Interval {
+    /// 左端點(含)。
     pub start: u32,
+    /// 右端點(不含)。
     pub end: u32,
 }
 
 impl Interval {
+    /// 兩區間是否重疊(半開:相接不算重疊;T2 排序鍵的依據)。
     pub fn overlaps(&self, o: &Interval) -> bool {
         self.start < o.end && o.start < self.end
     }
@@ -559,18 +589,24 @@ pub fn intervals(facts: &Facts, track: Track) -> (Vec<Vec<Interval>>, Vec<Event>
 }
 
 /// 紅邊集合(§3.3 衝突圖的邊):同一綁定、區間相交、相容性被違反。
+/// 紅邊(§3.3 衝突邊):同一綁定、活躍區間相交、相容性被違反。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RedEdge {
-    pub a: usize, // 事件索引(facts.events)
+    /// 事件 a 的索引(facts.events)。
+    pub a: usize,
+    /// 事件 b 的索引(facts.events)。
     pub b: usize,
+    /// 所屬綁定。
     pub binding: usize,
+    /// 兩事件活躍區間的交疊跨度(修法菜單的定位依據)。
     pub span: Span,
 }
 
+/// 計算給定軌道下的紅邊集合(衝突圖;空圖 ⇒ 幾何收斂 §3.5)。
 pub fn red_edges(facts: &Facts, track: Track) -> Vec<RedEdge> {
     let (ivs, events) = intervals(facts, track);
     let mut out = Vec::new();
-    for b in 0..facts.bindings.len() {
+    for (b, _) in facts.bindings.iter().enumerate() {
         let mut evs: Vec<usize> = (0..events.len())
             .filter(|&i| events[i].binding == b)
             .collect();

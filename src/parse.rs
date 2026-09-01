@@ -25,57 +25,100 @@ use crate::lex::{lex, TokKind, Token};
 use crate::span::Span;
 use std::collections::HashMap;
 
+/// 樹節點表中節點的下標(任何機器界內的樹都以 u32 綽綽有餘)。
 pub type NodeId = u32;
 
 /// 機器遞歸極限(誠實申報的引擎界;屬性測試生成深度 ≤ 12,遠低於此界)。
 pub const RECURSION_LIMIT: usize = 256;
 
+/// 表面語法樹(CST)的節點種類。二分:具名(結構)vs 匿名(token 行)。
+/// 具名 / 匿名 / trivia 的三分決定了 §1.3 的具名投影 π 與 §3.1 的跨度嵌套。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Kind {
     // —— 具名(named)——
+    /// 整棵樹的根(虛擬節點,span = 全源碼)。
     Root,
+    /// 函數項 `fn ...`(一級項)。
     FnItem,
+    /// 參數聲明(形參)。
     Param,
+    /// 型別引用 `int` / `thunk` / `&T`。
     TypeRef,
+    /// 花括號塊 `{ ... }`。
     Block,
+    /// `let` 綁定語句。
     LetStmt,
+    /// `if [cond] { ... } else { ... }`。
     IfStmt,
+    /// `while [cond] { ... }`。
     WhileStmt,
+    /// 表達式語句(以 `;` 終止)。
     ExprStmt,
+    /// 表達式(語法樹的運算面)。
     Expr,
+    /// 一元前綴運算 `&x` / `*x`。
     UnaryExpr,
+    /// 調用 `f(args)`。
     CallExpr,
     // —— 匿名(anonymous,token 層)——
+    /// 關鍵字 `fn`。
     FnKw,
+    /// 關鍵字 `let`。
     LetKw,
+    /// 關鍵字 `mut`。
     MutKw,
+    /// 關鍵字 `if`。
     IfKw,
+    /// 關鍵字 `else`。
     ElseKw,
+    /// 關鍵字 `while`。
     WhileKw,
+    /// 字面量 `true`。
     TrueKw,
+    /// 字面量 `false`。
     FalseKw,
+    /// `&`。
     Amp,
+    /// `*`。
     Star,
+    /// `+`。
     Plus,
+    /// `-`。
     Minus,
+    /// `==`。
     EqEq,
+    /// `<`。
     Lt,
+    /// `=`。
     Eq,
+    /// `(`。
     LParen,
+    /// `)`。
     RParen,
+    /// `{`。
     LBrace,
+    /// `}`。
     RBrace,
+    /// `;`。
     Semi,
+    /// `:`。
     Colon,
+    /// `,`。
     Comma,
+    /// 識別字。
     Ident,
+    /// 數字字面量。
     Number,
+    /// 空白/註釋(保留於樹中僅為平鋪完整性)。
     Trivia,
-    Error, // 匿名:卡死點封存(§2.3)
+    /// 匿名:卡死點的封存(§2.3 ERROR 全化)。
+    Error,
+    /// 詞法級壞字元。
     BadTok,
 }
 
 impl Kind {
+    /// 是否為具名(結構)節點(§1.3 投影 π 的保留集)。
     pub fn is_named(self) -> bool {
         matches!(
             self,
@@ -94,6 +137,7 @@ impl Kind {
         )
     }
 
+    /// 節點種類的規範標簽(sexp 序列化與調試輸出用)。
     pub fn label(self) -> &'static str {
         match self {
             Kind::Root => "root",
@@ -140,9 +184,13 @@ impl Kind {
 }
 
 #[derive(Clone, Debug)]
+/// 樹節點:種類 + 半開跨度 + 直接子節點表(§1.1)。
 pub struct Node {
+    /// 節點種類(具名/匿名/token/trivia/error)。
     pub kind: Kind,
+    /// 節點覆蓋的半開源碼跨度 σ(v) = [start, end)。
     pub span: Span,
+    /// 直接子節點 id(依源碼順序)。
     pub children: Vec<NodeId>,
 }
 
@@ -150,22 +198,31 @@ pub struct Node {
 /// 對 LL(1) 語境,這等價於 (祖先開節點種類棧, 前一結構 token, 後一結構 token)。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cfg {
+    /// 祖先開始節點棧(LL(1) 語境的正則/棧摘要)。
     pub stack: Vec<Kind>,
+    /// 子樹左邊界前的最後一個結構 token。
     pub prev: Option<TokKind>,
+    /// 子樹右邊界後的第一個結構 token。
     pub next: Option<TokKind>,
 }
 
 #[derive(Clone, Debug)]
+/// 解析產物:源碼 + 節點表 + 配置快照 + 首未 token 統計(§1.1 / §5.3)。
 pub struct Tree {
+    /// 被解析的源碼(逐字節保留 ⇒ L1 無損回環)。
     pub src: String,
+    /// 節點表(連續存儲;id 即下標)。
     pub nodes: Vec<Node>,
+    /// 每個節點子樹邊界處的解析器配置快照(重用統計的對賬依據)。
     pub cfgs: Vec<Cfg>,
     /// 每個節點(子樹)的第一個 / 最後一個非 trivia token 種類(用於重用統計與對賬)。
     pub first_tok: Vec<Option<TokKind>>,
+    /// 每個節點(子樹)的最後一個非 trivia token 種類(用於重用統計與對賬)。
     pub last_tok: Vec<Option<TokKind>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 解析引擎對外向調用方的失敗報告(僅兩種:語法層與引擎界)。
 pub enum ParseIssue {
     /// 語法層失敗(由 ERROR 恢復處理;對外向的調用方表示「此構造無法開始」)。
     Syntax,
@@ -285,7 +342,7 @@ impl<'a> Parser<'a> {
 
     fn bump(&mut self) -> Option<(TokKind, Span)> {
         self.skip_trivia();
-        let t = self.cur()?.clone();
+        let t = *self.cur()?;
         if t.kind != TokKind::Trivia {
             self.last_struct = Some(t.kind);
         }
@@ -556,11 +613,17 @@ impl<'a> Parser<'a> {
         let id = self.open(Kind::FnItem)?;
         self.bump(); // fn
         if self.peek() != Some(TokKind::Ident) {
-            return Ok(self.item_err(frame, id));
+            return {
+                self.item_err(frame, id);
+                Ok(())
+            };
         }
         self.bump();
         if self.peek() != Some(TokKind::LParen) {
-            return Ok(self.item_err(frame, id));
+            return {
+                self.item_err(frame, id);
+                Ok(())
+            };
         }
         self.parse_params()?;
         self.parse_block()?;
@@ -630,15 +693,10 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         let _id = self.open(Kind::TypeRef)?;
-        loop {
-            match self.peek() {
-                Some(TokKind::Amp) => {
-                    self.bump();
-                    if self.peek() == Some(TokKind::Mut) {
-                        self.bump();
-                    }
-                }
-                _ => break,
+        while matches!(self.peek(), Some(TokKind::Amp)) {
+            self.bump();
+            if self.peek() == Some(TokKind::Mut) {
+                self.bump();
             }
         }
         if self.peek() != Some(TokKind::Ident) {
@@ -735,22 +793,36 @@ impl<'a> Parser<'a> {
                     self.bump();
                 }
                 if self.peek() != Some(TokKind::Ident) {
-                    return Ok(self.stmt_err(frame, id));
+                    return {
+                        self.stmt_err(frame, id);
+                        Ok(())
+                    };
                 }
                 self.bump();
                 if self.peek() == Some(TokKind::Eq) {
                     self.bump();
                     if self.peek() == Some(TokKind::Semi) {
-                        return Ok(self.stmt_err(frame, id));
+                        return {
+                            self.stmt_err(frame, id);
+                            Ok(())
+                        };
                     }
                     match self.parse_expr() {
                         Ok(()) => {}
                         Err(ParseIssue::Depth) => return Err(ParseIssue::Depth),
-                        Err(ParseIssue::Syntax) => return Ok(self.stmt_err(frame, id)),
+                        Err(ParseIssue::Syntax) => {
+                            return {
+                                self.stmt_err(frame, id);
+                                Ok(())
+                            }
+                        }
                     }
                 }
                 if self.peek() != Some(TokKind::Semi) {
-                    return Ok(self.stmt_err(frame, id));
+                    return {
+                        self.stmt_err(frame, id);
+                        Ok(())
+                    };
                 }
                 self.bump();
                 self.close();
@@ -760,16 +832,27 @@ impl<'a> Parser<'a> {
                 let id = self.open(Kind::IfStmt)?;
                 self.bump();
                 if !expr_start(self.peek()) {
-                    return Ok(self.stmt_err(frame, id));
+                    return {
+                        self.stmt_err(frame, id);
+                        Ok(())
+                    };
                 }
                 match self.parse_expr() {
                     Ok(()) => {}
                     Err(ParseIssue::Depth) => return Err(ParseIssue::Depth),
-                    Err(ParseIssue::Syntax) => return Ok(self.stmt_err(frame, id)),
+                    Err(ParseIssue::Syntax) => {
+                        return {
+                            self.stmt_err(frame, id);
+                            Ok(())
+                        }
+                    }
                 }
                 // 塊缺失 ⟹ 整個 if 是錯誤區域(切割時把壞語句整段移除)。
                 if self.peek() != Some(TokKind::LBrace) {
-                    return Ok(self.stmt_err(frame, id));
+                    return {
+                        self.stmt_err(frame, id);
+                        Ok(())
+                    };
                 }
                 self.parse_block()?;
                 if self.peek() == Some(TokKind::Else) {
@@ -779,7 +862,10 @@ impl<'a> Parser<'a> {
                     } else if self.peek() == Some(TokKind::LBrace) {
                         self.parse_block()?;
                     } else {
-                        return Ok(self.stmt_err(frame, id));
+                        return {
+                            self.stmt_err(frame, id);
+                            Ok(())
+                        };
                     }
                 }
                 self.close();
@@ -789,15 +875,26 @@ impl<'a> Parser<'a> {
                 let id = self.open(Kind::WhileStmt)?;
                 self.bump();
                 if !expr_start(self.peek()) {
-                    return Ok(self.stmt_err(frame, id));
+                    return {
+                        self.stmt_err(frame, id);
+                        Ok(())
+                    };
                 }
                 match self.parse_expr() {
                     Ok(()) => {}
                     Err(ParseIssue::Depth) => return Err(ParseIssue::Depth),
-                    Err(ParseIssue::Syntax) => return Ok(self.stmt_err(frame, id)),
+                    Err(ParseIssue::Syntax) => {
+                        return {
+                            self.stmt_err(frame, id);
+                            Ok(())
+                        }
+                    }
                 }
                 if self.peek() != Some(TokKind::LBrace) {
-                    return Ok(self.stmt_err(frame, id));
+                    return {
+                        self.stmt_err(frame, id);
+                        Ok(())
+                    };
                 }
                 self.parse_block()?;
                 self.close();
@@ -806,15 +903,26 @@ impl<'a> Parser<'a> {
             _ => {
                 let id = self.open(Kind::ExprStmt)?;
                 if !expr_start(self.peek()) {
-                    return Ok(self.stmt_err(frame, id));
+                    return {
+                        self.stmt_err(frame, id);
+                        Ok(())
+                    };
                 }
                 match self.parse_expr() {
                     Ok(()) => {}
                     Err(ParseIssue::Depth) => return Err(ParseIssue::Depth),
-                    Err(ParseIssue::Syntax) => return Ok(self.stmt_err(frame, id)),
+                    Err(ParseIssue::Syntax) => {
+                        return {
+                            self.stmt_err(frame, id);
+                            Ok(())
+                        }
+                    }
                 }
                 if self.peek() != Some(TokKind::Semi) {
-                    return Ok(self.stmt_err(frame, id));
+                    return {
+                        self.stmt_err(frame, id);
+                        Ok(())
+                    };
                 }
                 self.bump();
                 self.close();
@@ -829,15 +937,16 @@ impl<'a> Parser<'a> {
         }
         let id = self.open(Kind::Expr)?;
         self.parse_unary()?;
-        loop {
-            match self.peek() {
-                Some(TokKind::Plus) | Some(TokKind::Minus) | Some(TokKind::Star)
-                | Some(TokKind::EqEq) | Some(TokKind::Lt) => {
-                    self.bump();
-                    self.parse_unary()?;
-                }
-                _ => break,
-            }
+        while matches!(
+            self.peek(),
+            Some(TokKind::Plus)
+                | Some(TokKind::Minus)
+                | Some(TokKind::Star)
+                | Some(TokKind::EqEq)
+                | Some(TokKind::Lt)
+        ) {
+            self.bump();
+            self.parse_unary()?;
         }
         self.close();
         let _ = id;
@@ -925,6 +1034,8 @@ impl<'a> Parser<'a> {
 // 增量重析:配置快照重用(§2.2 / §5.3)
 // ===========================================================================
 
+/// 增量重析的中間表(§2.2 / §5.3):哪些舊節點髒、新坐標下的跨度、
+/// 按邊界索引的候選。L3 增量等價按約定不在律級斷言內(見需求排除)。
 pub struct ReuseData<'a> {
     old: &'a Tree,
     #[allow(dead_code)]
@@ -936,6 +1047,7 @@ pub struct ReuseData<'a> {
 }
 
 impl<'a> ReuseData<'a> {
+    /// 由舊樹 + 編輯集構造重用表(標髒、重定 span、建索引)。
     pub fn build(old: &'a Tree, edits: &'a [Edit]) -> ReuseData<'a> {
         let n = old.nodes.len();
         let mut dirty = vec![false; n];
@@ -1078,17 +1190,21 @@ fn clone_subtree(
         last_tok.push(old.last_tok[*id as usize]);
     }
     // 確保父節點先於子節點被建:order 是 DFS 前序(父先)。
-    let root_new = map[oid as usize];
-    root_new
+
+    map[oid as usize]
 }
 
 // ===========================================================================
 // 對外接口
 // ===========================================================================
 
+/// 增量重析的輸出:新樹 + 重用統計(reused/total = 重用率,§5.3 對賬指標)。
 pub struct ReparseOut {
+    /// 重析後的新樹。
     pub tree: Tree,
+    /// 被重用(未重新解析)的舊節點數。
     pub reused: usize,
+    /// 舊樹總節點數。
     pub total: usize,
 }
 
@@ -1133,11 +1249,13 @@ pub fn reparse(old: &Tree, new_src: &str, edits: &[Edit]) -> Result<ReparseOut, 
 // ===========================================================================
 
 impl Tree {
+    /// 根節點 id(恆為 0;樹不空)。
     pub fn root(&self) -> NodeId {
         assert!(!self.nodes.is_empty());
         0
     }
 
+    /// 依 id 取節點引用。
     pub fn node(&self, id: NodeId) -> &Node {
         &self.nodes[id as usize]
     }
@@ -1226,6 +1344,7 @@ impl Tree {
         self.nodes.iter().filter(|n| n.kind == Kind::Error).count()
     }
 
+    /// L7a 斷言用:樹中是否存在 ERROR 節點。
     pub fn has_error(&self) -> bool {
         self.n_errors() > 0
     }
@@ -1319,6 +1438,7 @@ impl Tree {
         out
     }
 
+    /// 節點總數(具名 + 匿名 + trivia + error;樹的規模度量)。
     pub fn total_nodes(&self) -> usize {
         self.nodes.len()
     }

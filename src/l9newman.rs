@@ -16,20 +16,30 @@
 use crate::rep::{apply, enumerate_states, l8_check, AState, Menu, Policy, Rule, K};
 use std::collections::{BTreeSet, HashMap};
 
+/// Newman 通道的機械報告(§4.2–4.3 的驗證輸出;所有字段皆可機械復算)。
 #[derive(Clone, Debug)]
 pub struct NewmanReport {
+    /// 被驗證的菜單。
     pub menu: Menu,
+    /// 施用策略。
     pub policy: Policy,
+    /// 窮舉的狀態數。
     pub states: usize,
+    /// L8 遞減違反(源狀態, 目標狀態, 規則)。
     pub l8_violations: Vec<(AState, AState, Rule)>,
+    /// 已檢查的臨界對數。
     pub critical_pairs: usize,
+    /// 不可回合的臨界對(源, r1, r2, 分支 a, 分支 b)。
     pub non_joinable: Vec<(AState, Rule, Rule, AState, AState)>,
+    /// 唯一正規形的狀態數。
     pub unique_nf_states: usize,
+    /// 多正規形狀態(源, 全部正規形)—— WCR 反例的載體。
     pub multi_nf: Vec<(AState, Vec<AState>)>,
+    /// 機器給出的結論(converges / WCR 違反)。
     pub conclusion: &'static str,
 }
 
-fn canon_key(s: &AState) -> Vec<(u32, u32, K, u32, u32)> {
+fn canon_key(s: &AState) -> StateKey {
     let mut v: Vec<(u32, u32, K, u32, u32)> = s
         .evs
         .iter()
@@ -39,13 +49,11 @@ fn canon_key(s: &AState) -> Vec<(u32, u32, K, u32, u32)> {
     v
 }
 
+/// 狀態的規範鍵(重寫系統的狀態空間元素)。
+pub type StateKey = Vec<(u32, u32, K, u32, u32)>;
+
 /// 從 s 出發的 bf(深度 ≤ depth)狀態閉包。
-fn closure(
-    s: &AState,
-    menu: Menu,
-    policy: Policy,
-    depth: usize,
-) -> HashMap<Vec<(u32, u32, K, u32, u32)>, AState> {
+fn closure(s: &AState, menu: Menu, policy: Policy, depth: usize) -> HashMap<StateKey, AState> {
     let mut seen: HashMap<_, AState> = HashMap::new();
     seen.insert(canon_key(s), s.clone());
     let mut frontier = vec![s.clone()];
@@ -58,8 +66,8 @@ fn closure(
             for r in menu.applicable(&st, policy) {
                 if let Some(s2) = apply(&st, r) {
                     let k = canon_key(&s2);
-                    if !seen.contains_key(&k) {
-                        seen.insert(k, s2.clone());
+                    if let std::collections::hash_map::Entry::Vacant(e) = seen.entry(k) {
+                        e.insert(s2.clone());
                         next.push(s2);
                     }
                 }
@@ -78,13 +86,8 @@ pub fn joinable(a: &AState, b: &AState, menu: Menu, policy: Policy, depth: usize
 }
 
 /// 從 s 出發收集所有正規形(極大歸約序列的終點)。
-pub fn normal_forms(
-    s: &AState,
-    menu: Menu,
-    policy: Policy,
-    depth: usize,
-) -> Vec<Vec<(u32, u32, K, u32, u32)>> {
-    let mut nfs: BTreeSet<Vec<(u32, u32, K, u32, u32)>> = BTreeSet::new();
+pub fn normal_forms(s: &AState, menu: Menu, policy: Policy, depth: usize) -> Vec<StateKey> {
+    let mut nfs: BTreeSet<StateKey> = BTreeSet::new();
     let mut stack = vec![(s.clone(), 0usize)];
     while let Some((st, d)) = stack.pop() {
         if d >= depth {
@@ -105,6 +108,9 @@ pub fn normal_forms(
     nfs.into_iter().collect()
 }
 
+/// 機械 Newman 檢查:對菜單 × 政策做窮舉狀態空間上的
+/// L8(測度遞減)+ 臨界對可合流(§4.3)雙重驗證,輸出報告。
+/// 前提(報告 §4.2):μ 良基 ⇒ SN;SN ∧ WCR ⇒ CR ⇒ 唯一正規形。
 pub fn newman_check(
     menu: Menu,
     policy: Policy,
@@ -139,13 +145,10 @@ pub fn newman_check(
             let mut y = x + 1;
             while y < rules.len() {
                 critical_pairs += 1;
-                match (apply(s, rules[x]), apply(s, rules[y])) {
-                    (Some(a), Some(b)) => {
-                        if !joinable(&a, &b, menu, policy, depth) {
-                            non_joinable.push((s.clone(), rules[x], rules[y], a, b));
-                        }
+                if let (Some(a), Some(b)) = (apply(s, rules[x]), apply(s, rules[y])) {
+                    if !joinable(&a, &b, menu, policy, depth) {
+                        non_joinable.push((s.clone(), rules[x], rules[y], a, b));
                     }
-                    _ => {}
                 }
                 y += 1;
             }

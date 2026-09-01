@@ -197,9 +197,9 @@ fn main() {
             if n.kind != cl0r0::parse::Kind::Error {
                 continue;
             }
-            if n.span.len() > 0 {
-                bad += 1;
-            } else if !(n.span.start as usize == cur.len() || seams.contains(&n.span.start)) {
+            if !n.span.is_empty()
+                || !(n.span.start as usize == cur.len() || seams.contains(&n.span.start))
+            {
                 bad += 1;
             }
         }

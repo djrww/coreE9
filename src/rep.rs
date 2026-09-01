@@ -25,14 +25,16 @@ use crate::ast::Interval;
 // ===========================================================================
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// 訪問種類(重寫系統狀態的原子標記:可變 / 共享)。
 pub enum K {
-    /// 可變訪問(write / &mut 引用本體)
+    /// 可變訪問(write / `&mut` 引用本體)。
     Mut,
-    /// 共享訪問(read / & 引用本體)
+    /// 共享訪問(read / `&` 引用本體)。
     Sh,
 }
 
 impl K {
+    /// 訪問種類的顯示標簽。
     pub fn label(self) -> &'static str {
         match self {
             K::Mut => "mut",
@@ -42,15 +44,22 @@ impl K {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 抽象事件:一個訪問的區間配置(重寫系統的最小對象)。
 pub struct Ev {
+    /// 事件 id(穩定;AState::new 自動補齊)。
     pub id: u32,
+    /// 所屬存儲/綁定(storage 分組 ⇒ 同一綁定內的衝突)。
     pub storage: u32,
+    /// 訪問種類。
     pub kind: K,
+    /// 活躍區間(半開)。
     pub it: Interval,
 }
 
+/// 抽象狀態:事件的多集 + 運行期借用邊 + 日誌(§4.1 的狀態空間元素)。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AState {
+    /// 事件配置。
     pub evs: Vec<Ev>,
     /// 已標記為運行期借用的邊(從 E_red 移出;事實層記 runtime-borrow 標記)。
     pub runtime: Vec<(u32, u32)>,
@@ -59,6 +68,7 @@ pub struct AState {
 }
 
 impl AState {
+    /// 從事件配置構造狀態(自動補齊事件 id;日誌為空)。
     pub fn new(evs: Vec<Ev>) -> AState {
         // 自動補 id
         let mut s = AState {
@@ -114,6 +124,7 @@ impl AState {
         a.0 < b.0 || (a.0 == b.0 && a.1 < b.1)
     }
 
+    /// 正規形判定:無紅邊(幾何收斂 §3.5 的終點)。
     pub fn is_normal_form(&self) -> bool {
         self.red_edges().is_empty()
     }
@@ -124,14 +135,20 @@ impl AState {
 // ===========================================================================
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 菜單規則(§4.1):狀態上可施的原子修法。
 pub enum Rule {
-    R1Shorten(u32, u32), // (事件 id, 新右端點)
-    R2Split(u32, u32),   // (事件 id, 切點)
-    R3Swap(u32, u32),    // (事件 a, 事件 b)—— 交換區間(重排語句)
-    R4Runtime(u32, u32), // (事件 a, 事件 b)—— 標記為運行期借用
+    /// 縮短:把事件的右端點左移(事件 id, 新右端點)。
+    R1Shorten(u32, u32),
+    /// 分裂:在切點把一個事件分裂為兩個(事件 id, 切點)。
+    R2Split(u32, u32),
+    /// 交換兩個事件的區間(重排語句)(事件 a, 事件 b)。
+    R3Swap(u32, u32),
+    /// 標記為運行期借用(事件 a, 事件 b)。
+    R4Runtime(u32, u32),
 }
 
 impl Rule {
+    /// 規則的顯示標簽(診斷輸出用)。
     pub fn label(&self) -> String {
         match self {
             Rule::R1Shorten(i, c) => format!("R1 shorten[{} → {}]", i, c),
@@ -143,6 +160,7 @@ impl Rule {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 施用策略:是否要求 μ 嚴格遞減(§4.2 側條件)。
 pub enum Policy {
     /// guard 通過 ⟺ μ 嚴格遞減(帶側條件的菜單 = 報告的封閉菜單紀律)。
     Guarded,
@@ -160,6 +178,7 @@ pub enum Menu {
 }
 
 impl Menu {
+    /// 菜單的顯示標簽。
     pub fn label(&self) -> &'static str {
         match self {
             Menu::CommutativeTrim => "CommutativeTrim(規範修剪)",

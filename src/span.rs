@@ -5,11 +5,14 @@
 /// 半開字節區間 [start, end) 。任何節點 / token 的 span 一律滿足 start <= end。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Span {
+    /// 左端點(含);恆有 start <= end。
     pub start: u32,
+    /// 右端點(不含);區間為 [start, end)。
     pub end: u32,
 }
 
 impl Span {
+    /// 構造半開區間;調試模式下斷言 start <= end。
     pub fn new(start: u32, end: u32) -> Span {
         debug_assert!(
             start <= end,
@@ -18,10 +21,12 @@ impl Span {
         Span { start, end }
     }
 
+    /// 區間長度 = end − start(字節數)。
     pub fn len(&self) -> u32 {
         self.end - self.start
     }
 
+    /// 空區間(start == end):即零字節的「插入點」。
     pub fn is_empty(&self) -> bool {
         self.start == self.end
     }
@@ -36,6 +41,7 @@ impl Span {
         self.start < other.end && other.start < self.end
     }
 
+    /// 座標系變換:整個區間平移 delta 字節(編輯位移函數的對偶)。
     pub fn shift(&self, delta: i64) -> Span {
         Span {
             start: (self.start as i64 + delta) as u32,

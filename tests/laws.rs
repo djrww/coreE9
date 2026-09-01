@@ -221,9 +221,9 @@ fn test_law_L7b_structural_maximality() {
             if n.kind != Kind::Error {
                 continue;
             }
-            if n.span.len() > 0 {
-                bad.push((i, n.span));
-            } else if !(n.span.start as usize == t.len() || seams.contains(&n.span.start)) {
+            if !n.span.is_empty()
+                || !(n.span.start as usize == t.len() || seams.contains(&n.span.start))
+            {
                 bad.push((i, n.span));
             }
         }

@@ -18,15 +18,19 @@
 use crate::span::Span;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// 一次編輯(§2.1 編輯單體的生成元):把原源碼空間的 [start, old_end)
+/// 替換為 `text`。插入 = start == old_end;刪除 = 空文本。
 pub struct Edit {
     /// 原源碼空間的替換區間 [start, old_end)。
     pub start: u32,
+    /// 原區間右端點(不含);插入時 old_end == start。
     pub old_end: u32,
     /// 新文本(位於 [start, start + text.len()))。
     pub text: String,
 }
 
 impl Edit {
+    /// 構造一次替換編輯 [start, old_end) → text。
     pub fn new(start: u32, old_end: u32, text: &str) -> Edit {
         Edit {
             start,
@@ -40,10 +44,12 @@ impl Edit {
         self.text.len() as i64 - (self.old_end as i64 - self.start as i64)
     }
 
+    /// 編輯後文本的新右端點(start + text.len())。
     pub fn new_end(&self) -> u32 {
         self.start + self.text.len() as u32
     }
 
+    /// 恆等編輯(空替換區 + 空文本):單位的候選。
     pub fn is_empty(&self) -> bool {
         self.text.is_empty() && self.old_end == self.start
     }
@@ -77,6 +83,7 @@ impl Edit {
 ///   * e₂ 在 e₁ 之後:e₂ 的坐標經 e₁ 逆位移後回到原空間,得到並行的
 ///     兩個互不重疊編輯(順序無關 —— M5 的合併語義);
 ///   * e₂ 在 e₁ 之前:同理,返回 [e₂′, e₁]。
+///
 /// 相疊(如 e₂ 改寫了 e₁ 插入的文本)需要真正的文本拼接,本函數如實
 /// 返回 None(該情形不屬於「去抖批次歸併」的語義範圍)。
 pub fn compose(e1: &Edit, e2: &Edit) -> Option<Vec<Edit>> {
@@ -150,8 +157,8 @@ pub fn is_pairwise_disjoint(edits: &[Edit]) -> bool {
             if a.is_empty() && b.is_empty() && a.start == b.start {
                 return false;
             }
-            let a_nonempty = a.len() > 0;
-            let b_nonempty = b.len() > 0;
+            let a_nonempty = !a.is_empty();
+            let b_nonempty = !b.is_empty();
             if a_nonempty && b_nonempty && a.overlaps(&b) {
                 return false;
             }

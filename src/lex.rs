@@ -12,45 +12,76 @@
 
 use crate::span::Span;
 
+/// CL0 詞法器輸出(有限自動機的字母表;§5.1:平鋪 = 每個字節恰屬一個 token)。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum TokKind {
+    /// 識別字:`[a-z][a-z0-9]*`(CL0 只用小寫;R₀ 擴展見 `r0` 模塊)。
     Ident,
+    /// 十進制整數字面量。
     Number,
+    /// 布林字面量 `true`。
     True,
+    /// 布林字面量 `false`。
     False,
+    /// 關鍵字 `fn`(函數項的開頭)。
     Fn,
+    /// 關鍵字 `let`(綁定語句的開頭)。
     Let,
+    /// 關鍵字 `mut`(可變綁定修飾)。
     Mut,
+    /// 關鍵字 `if`。
     If,
+    /// 關鍵字 `else`。
     Else,
+    /// 關鍵字 `while`。
     While,
-    Amp,  // &
-    Star, // *
+    /// `&` 借用運算符(規格中的 &amp; / &amp;amp;)。
+    Amp,
+    /// `*` 解引用運算符。
+    Star,
+    /// `+` 二元運算符。
     Plus,
+    /// `-` 二元運算符。
     Minus,
+    /// `==` 相等比較。
     EqEq,
+    /// `<` 小於比較。
     Lt,
-    Eq, // =
+    /// `=` 綁定/賦值。
+    Eq,
+    /// `(`(參數/實參列表左界)。
     LParen,
+    /// `)`(右界)。
     RParen,
+    /// `{`(塊左界)。
     LBrace,
+    /// `}`(塊右界;同時是語句同步點,§2.3)。
     RBrace,
+    /// `;`(語句終止符)。
     Semi,
+    /// `:`(型別標註)。
     Colon,
+    /// `,`(參數/實參分隔)。
     Comma,
+    /// 空白與註釋:平鋪保留但**不**進入結構樹(§1.3 投影的物象)。
     Trivia,
-    Bad, // 詞法錯誤字元(仍佔一個平鋪 token)
+    /// 詞法錯誤字元(仍佔一個平鋪 token ⇒ 全化,L7 的詞法基石)。
+    Bad,
 }
 
 impl TokKind {
+    /// 是否為結構 token(即非 Trivia;§5.1 平鋪/結構二分)。
     pub fn is_struct(self) -> bool {
         self != TokKind::Trivia
     }
 }
 
+/// 詞法單元:種類 + 源碼跨度(半開)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Token {
+    /// token 種類。
     pub kind: TokKind,
+    /// 在源碼中的平鋪跨度。
     pub span: Span,
 }
 

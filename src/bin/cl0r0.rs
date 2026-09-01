@@ -150,7 +150,7 @@ fn main() {
     let mut st = s0.clone();
     let mut plan = Vec::new();
     while let Some((s2, r)) = rep::step(&st, Menu::CommutativeTrim, Policy::Guarded) {
-        plan.push((r.clone(), st.red_edges().len(), s2.red_edges().len()));
+        plan.push((r, st.red_edges().len(), s2.red_edges().len()));
         st = s2;
     }
     for (r, before, after) in plan {
