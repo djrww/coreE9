@@ -165,7 +165,28 @@ Rocq `ends_for m s := iend := s + S d`)**由構造排除**倒掛 ⇒ 倒掛桶�
 **非精確交換全為 0**。結論:倒掛不破壞精確交換,但**機制不是**捷徑成立
 (是别的候選撐住 min),故**不可**拿探針結果省掉第 (a) 點的论证。
 
-**(c) 目前唯一的硬阻擋(technical)**:`cut_for_gt_start` 需要從
+**(c′) **病根(實測,非推測)**:Coq 8.20 的 `cbn`/`simpl` **不會約簡 `List.fold_left`**
+   —— 當列表引數是**變數**時(如 `fold_left g [] acc`,`acc` 是變數),約簡引擎停住;
+   但**定義上確實相等**:`change (fold_left g [] acc) with acc in Hf` 成功,
+   `Lemma fold_left_nil : fold_left f nil acc = acc. Proof. reflexivity. Qed.` 也直接過。
+   ⇒ 前面十幾回合所有「`cbn in Hf` 後 expect 一個可 injection 的形状」都是**空轉**
+   (`cbn` 什麼也沒做,錯誤訊息卻指向後續的 `discriminate`/`injection`,誤導到別處)。
+   **正解套路(後續一律照做)**:
+     1. 需要約簡 fold 時,用 `change … with …`(或 reflexivity 級的 `fold_left_nil`/
+        `fold_left_cons` 引理 + `rewrite`),**不要**指望 `cbn in H`。
+     2. 帰納時把 `acc`/`d` 一起 generalize:`intros A P g acc l d. revert acc d.`
+        (`revert` 只能用在**已 intro** 的變數上;`intros` 少一個名字就報
+        「No such hypothesis / was not found」,這是本輪另一類高頻錯誤)。
+     3. `IH` 的假設順序要和**陳述一致**再 `apply (IH acc' d' Hacc' Hg' Hf')`,
+        或乾脆 `apply (IH acc' d').` 讓 Coq 自己排 subgoal(用 `*`/`+` 而非 `-`/`--`,
+        本輪因 bullet 級別錯位多燒了 3 回合)。
+     4. `In y (x :: t)` 用 `apply (proj1 (in_cons x y t)) in Hy` 拆成 `y = x` / `In y t`,
+        **不要**用 `destruct Hy`(`In` 是 fixpoint,destruct 報「Not an inductive definition」)、
+        更不要 `simpl in Hy; intuition`(會連別假設一起重命名,把 `y` 改成 `option A`
+        之類,之後所有 `specialize` 全部對不上)。
+   骨架 `fold_left_inv`(抽象到「P + g 每步保 P」,**完全不用碰 Mirror 的 fold**)已推通
+   base 與 cons 的主幹,只剩 cons 裡一個 `In` 分支的 `specialize` 對齊;
+   該 lemma 與上述四點是下一輪的起點,勿從頭再寫。**:`cut_for_gt_start` 需要從
 `fold_left (fun acc y => Some (Nat.min …)) l None = Some k` 推出界性質。
 Coq 8.20 下 `cbn in H` 會**順帶約簡 `match None with … end`**,把假設壓成
 `Some (Nat.min (istart (ev_it x)) m) = Some k`,令 `injection` 無東西可注入;
