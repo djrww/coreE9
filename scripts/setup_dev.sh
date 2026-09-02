@@ -7,6 +7,13 @@
 
 set -eu
 
+# 關鍵:sudo 執行時 $HOME=/root,會把 rustup 裝進 /root/.cargo(用戶 shell 找不到 cargo)。
+# 因此以 SUDO_USER 的真實 home 為工具鏈落點(本專案實測踩過的坑,見 docs/HARD-ITEMS.md §#4)。
+REAL_HOME="$HOME"
+if [ "$(id -u)" = 0 ] && [ -n "${SUDO_USER:-}" ]; then
+  REAL_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+fi
+
 WITH_ROCQ=1
 for a in "$@"; do
   case "$a" in
@@ -27,13 +34,19 @@ fi
 
 # ── Rust(工具鏈可能在快照後消失)───────────────────────────────────────
 if ! command -v cargo >/dev/null 2>&1; then
-  if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+  if [ ! -x "$REAL_HOME/.cargo/bin/cargo" ]; then
     echo "== installing rust toolchain (rustup) =="
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       -o /tmp/rustup-init.sh
-    sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable
+    CARGO_HOME="$REAL_HOME/.cargo" RUSTUP_HOME="$REAL_HOME/.rustup" \
+      sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable rustfmt clippy
   fi
-  PATH="$HOME/.cargo/bin:$PATH"; export PATH
+  PATH="$REAL_HOME/.cargo/bin:$PATH"; export PATH
+fi
+# --check:只報版本,不安裝(供 CI/文檔驗證可重建性)
+if [ "${1:-}" = "--check" ]; then
+  cargo --version; rustc --version; command -v coqc >/dev/null && coqc --version | head -1
+  echo "== check only, no changes =="; exit 0
 fi
 cargo --version
 rustc --version

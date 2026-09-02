@@ -101,6 +101,85 @@
   是 sound 的」+ 在此空間跑 native_compute —— 得到「有限空間的機器可檢查證明」
   (反射式,Phase 6),而「任意狀態的 WCR」標記為開放。
 
+#### R3 開工實測(2026-09-02):捷徑被證偽,改走 trim1 成對歸納
+
+上面第 1–2 點那個「start 不變 ⇒ 他人候選集不變」的捷徑,本輪在 Rocq 裡
+**實測為假**(不是證不出,是命題本身不成立):
+
+```
+ct_pred a b  =  id b ≠ id a ∧ storage b = storage a ∧ k_conflict (kind a) (kind b)
+                ∧ istart a < istart b ∧ i_overlap (it a) (it b)
+i_overlap a b = (istart a <? iend b) ∧ (istart b <? iend a)
+```
+
+`cut_for` 的候選集確實只由 (id, storage, kind, istart) 與**雙方 iend**決定;
+其中 `istart b <? iend a` 這一项讓「剪 a 自己」會縮小 a 的候選集。
+`rocq/theories/WCRUtil.v` 以三個 `vm_compute` 事實把此事釘死(已 kernel 驗):
+`ct_pred evA evB = true`、`ct_pred (trim_ev evA 2) evB = false`、
+`ct_pred evA (trim_ev evB 1) = true`(剪被觀者的 iend 在本例不改判定,
+因為 `istart a <? iend b` 在合法區間下恆真 —— 這正是捷徑**看起來**成立的原因)。
+
+**修正後的 R3 證明形狀**(逐點不變 → 對稱收縮):
+
+1. `trim1 i c l l'`:成對走兩列表的歸納謂詞,精確刻畫 `trim_at`
+   (已入庫:`trim1_spec`、`trim1_length`、`trim1_nth_other`)。
+   用它是因為 `nth_error` 按 nat 遞歸,遇未約簡的 `trim_at q i c` 會卡死
+   —— 這是本輪最大的時間黑洞,後續請勿重蹈。
+2. 交換性的正確論證:**兩步各自剪掉一個事件**,而「剪 b」對「非 a 的第三方
+   候選集」是同一個變換(與先剪 a 或先剪 b 無關)⇒ 兩次得到的候選集**同構**,
+   其 min-start 相同 ⇒ `cut_for` 給出同一個 `c` ⇒ 狀態逐字相等
+   (與探針的「精確交換」一致,不是僅「可回合」)。
+3. 由 2 直接得到的**可證事實**(已逐字核對定義,非憑記憶):
+   `ct_pred a x` 的五个合取項中,只有 `istart a <? iend x` 讀 **x 的 iend**;
+   其餘(`ev_id x`、`ev_storage x`、`ev_kind x`、`istart x`、`istart x <? iend a`)
+   對 x 的 iend 不變 ⇒ **對「未被剪的那一位 x」,候選判定逐點不變**;
+   被剪的那一位(`x = b`)則可能由 true 翻成 false。
+   故 R3 可用的引理形狀是「**候選集的差異恰好是被剪者本身**」,不是不變性;
+   而 t1、t2 兩側的差異是**同一個** b(同理同一個 a),這是對稱性所在的關鍵。
+4. 尚**未**完成的部分(誠實申報,屬下一輪):把 3 對稱性收斂成
+   `cut_for` 層等式(`cut_for t1 a = cut_for t2 b'` 之類),以及
+   `R3_ct_wcr` / `R4_ct_confluent` 主定理。目前 `rocq/theories/WCRUtil.v`
+   只入庫結構層 + 候選謂語層(`trim1_spec`/`trim1_length`/`trim1_nth_other`/
+   `trim_at_trim_at_here`、`cut_for_is_filter`、`ct_pred_start_lt`、三個
+   vm_compute 語義事實),**不含任何 `Admitted`/`Axiom`**,`make -C rocq` 全綠。
+
+#### R3 第二輪(2026-09-02):良構性之爭 + `fold_left` 是目前的硬阻擋
+
+**(a) 第 3 點的「合法區間下恆真」需要**显式**不变量,不能默認。**
+鏡像的 `AState` 型別**允許** `istart > iend` 的倒掛事件,故第 3 點的捷徑對
+**所有** `AState` 為假(a=[5,2)、b=[0,10):剪 a 後 `istart b <? iend a` = `0 <? 2` 仍真
+⇒ a 仍在 b 的候選集)。正確做法是把良構性當**不變量**帶進 R3:
+
+```coq
+Definition wf_state (s : AState) : Prop :=
+  forall e, In e (st_evs s) -> istart (ev_it e) <? iend (ev_it e) = true.
+```
+
+而「CT 步保持 wf」恰好**只差一支引理** `cut_for_gt_start`。
+
+**(b) 探針不得自欺:`examples/r3_wf.rs` 的第一版是套套邏輯。**
+它只跑 `enumerate_states`,而該生成式(Rust `for end in (start+1)..=max_coord`;
+Rocq `ends_for m s := iend := s + S d`)**由構造排除**倒掛 ⇒ 倒掛桶恆空
+(實測 n=3 m=5:27,000 狀態、含倒掛 0 個)。第二節改為**自行枚舉允許倒掛**的宇宙,
+實測:n=3 m=3/4/5 → 98,000 / 299,160 個含倒掛狀態,CT peers 387 / 2,259 / 8,757,
+**非精確交換全為 0**。結論:倒掛不破壞精確交換,但**機制不是**捷徑成立
+(是别的候選撐住 min),故**不可**拿探針結果省掉第 (a) 點的论证。
+
+**(c) 目前唯一的硬阻擋(technical)**:`cut_for_gt_start` 需要從
+`fold_left (fun acc y => Some (Nat.min …)) l None = Some k` 推出界性質。
+Coq 8.20 下 `cbn in H` 會**順帶約簡 `match None with … end`**,把假設壓成
+`Some (Nat.min (istart (ev_it x)) m) = Some k`,令 `injection` 無東西可注入;
+`cbn [fold_left]`、`case_eq`、`destruct … eqn:Hm`、`revert`/`generalize` 各種組合
+皆試過仍卡在同一處。**可行的解法(下一輪照做,別再硬幹)**:不要碰 `fold_left`,
+先另立右折 `minopt`(結構上天然歸約),證 `minopt_agree`(兩形等價,對 `l` 歸納、
+`acc`/`d` 用 `intros f l acc d.` 全量引入)與 `minopt_pos`(min 保持 `0 <? ·`),
+再由 `ct_pred_start_lt` 餵 `minopt_pos`。本輪已寫到 `minopt` 版本,`Qed` 尚未全綠。
+
+**(d) 另一條省時教訓**:`trim1` 是 Prop 關係,`H : trim1 i c l l'` 同時依賴 `l` 與 `l'`
+⇒ Coq **拒絕**單邊 `revert`(「l is used in hypothesis H」)。要對 `nth_error` 形狀的
+陳述做歸納,得**一開始就把 l、l'、e、He 全部留在目標裡**(`induction H as […]; intros …`),
+或直接改用**歸納函數**(return 出 `l'`)。本輪據此把 `trim1_nth_here` 移出檔案。
+
 ### R4 · 唯一正規形 — 易
 - R1–R3 拼上即得;規範化函數用 `Fix`(在 SN 的良基關係上)。
 - 規模:<200 行(若 Phase 1 已把 Newman 引出為定理)。
@@ -207,9 +286,12 @@
 
 ## 七、風險與誠實申報
 
-1. **R3 是唯一高風險點**:若「start 不變」不成立(規則有隱式依賴),
-   則 WCR 證明需改走「有限空間反射證書」路(Phase 6 提前),並在
-   SPEC-TRACE 如實標註「任意狀態 WCR:開放」。
+1. **R3 是唯一高風險點**:原計劃的捷徑「start 不變 ⇒ 他人 cut 不變」已於
+   2026-09-02 實測**作廢**(詳見 §三-R3「開工實測」:`ct_pred` 含
+   `istart a <? iend b`,故被剪者本身會從他人候選集移除)。改走「候選集差異
+   恰為被剪者本身 + 兩側對稱」路線。若該路線仍卡住,則 WCR 證明需改走
+   「有限空間反射證書」路(Phase 6 提前),並在 SPEC-TRACE 如實標註
+   「任意狀態 WCR:開放」。
 2. **語義與數字表示**:Rocq 用 `nat`/`list` 鏡像,實作用 `u32`/`Vec` —— 同構性
    靠對帳(差分/具名),文件明示,不假設自動。
 3. **rustc oracle**:µ 的 `|Err_rustc|` 分量按 §6.3 記 0(判定權不轉移),不建假模型;
