@@ -61,6 +61,30 @@ median 超標 → 只印「median 超標(環境污染線索)」,不判紅
   (623,616 狀態 × 635,424 臨界對)在 ~6.7s 完成 —— 基準僅取 3×4×6
   作回歸信號。
 
+## CI 首跑實測(2026-09-02,PR #8 @ GitHub ubuntu-latest 4 核)
+
+`run #15` 四個 job 全 success(fmt/clippy/test/doc、rocq、coverage、**benchmark gate**)。
+job log 里的 gate 表(跨機 2 核基線 → 4 核 runner):
+
+```
+kernel            base      cur    best  median   band  verdict
+lex             0.0005   0.0005   1.021   0.962  10.0%  ok
+parse           0.0039   0.0037   0.938   0.839  13.0%  ok
+laminar         0.0085   0.0078   0.911   0.830  10.1%  ok
+named_sexp      0.0089   0.0083   0.937   0.872   7.8%  ok
+l7b_evaluate    0.0069   0.0068   0.984   0.960   5.0%  ok
+r0_lex          0.0006   0.0006   0.960   0.933   5.2%  ok
+r0_parse        0.0026   0.0024   0.914   0.840   9.3%  ok
+newman_3x4x6    6.1723   6.6230   1.073   1.072   5.0%  ok
+---- null 參考內核 -17.6% ⇒ 環境漂移校正係數 0.824
+```
+
+判讀:runner 的 `null` 比沙箱基線**快 17.6%**,而多數內核也只快 2–9% ⇒ 兩者一致,
+判定 ok。真正值得留意的是 `newman_3x4x6` 在「環境比較快」的情況下**反而慢 7.3%**
+(它是多執行緒通道)——舊 gate 用裸 median + 單次採樣會把這類信號整個淹掉。
+基線維持沙箱版即可通過 CI(已實證);若要完全同境,在 runner 上跑一次
+`--emit-baseline` 並提交(PR 內人工確認,不設自動回寫)。
+
 ## 常用指令
 
 ```bash
