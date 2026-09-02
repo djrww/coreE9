@@ -116,3 +116,45 @@ jobs:
           name: hotpaths-bench-log
           path: target/bench.log
           if-no-files-found: ignore
+
+  docs-consistency:
+    name: docs consistency(STATUS.json = 數字單一來源)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain + llvm tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install Rocq(Coq)+ MathComp
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y coq libcoq-mathcomp-ssreflect
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      # 先自測稽核器判別力:文件數字寫錯 / 規則命中 0 次 都必須紅
+      # (命中 0 次視為失敗 —— 文件被重整而規則靜默失效,是這類漂移的溫床)
+      - name: Docs check self-test(discriminative power)
+        run: python3 tools/docs_check_selftest.py
+
+      # 由實測重新產生 STATUS.json(不信任庫裡那份:它只是給人看的快照)
+      - name: Generate STATUS.json
+        run: python3 tools/gen_status.py
+
+      - name: Docs consistency check
+        run: python3 tools/docs_check.py
+
+      - name: Upload STATUS.json
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: STATUS-json
+          path: docs/STATUS.json
+          if-no-files-found: ignore

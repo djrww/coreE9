@@ -560,11 +560,18 @@ fn test_law_L9_naive_menu_finds_counterexample() {
 
 #[test]
 fn test_law_L9_scaled_space_joinable() {
-    // P0 #4:空間擴張(3 事件 × 5 座標 → 4 事件 × 5 座標)+ 並行分塊。
-    // CommutativeTrim/Guarded 在 105,216 狀態 × 100,392 臨界對上:
+    // P0 #4:空間擴張(3 事件 × 5 座標 → **4 事件 × 6 座標**)+ 並行分塊。
+    // CommutativeTrim/Guarded 在 623,616 狀態 × 635,424 臨界對上:
     // L8 零違反、臨界對全可回合、全狀態唯一正規形 —— Newman 結論在
-    // 更大空間上機械成立(規模較 3×5 大 ~10×)。
-    let r = cl0r0::l9newman::newman_check(Menu::CommutativeTrim, Policy::Guarded, 4, 5, 8);
+    // 更大空間上機械成立。
+    //
+    // 規模寫死的原因(2026-09-03 健檢 §P3-8/M5):本測試原先跑 4×5
+    // (105,216 狀態),而 `docs/R3-RESEARCH.md` / `ROCQ-TRACE.md` /
+    // `SPEC-TRACE.md` 三處都引用 4×6 = **623,616**,把它當成「CI 現有規模」
+    // —— 但那個數字其實是人工跑 `examples/r3_probe` 得到的,**沒有任何回歸
+    // 保護**。寧可把測試升上來讓文件成立,也不要把文件降級來遷就測試。
+    // 兩個計數都用 `assert_eq!` 釘住:生成器日後若靜默縮水,這裡會紅。
+    let r = cl0r0::l9newman::newman_check(Menu::CommutativeTrim, Policy::Guarded, 4, 6, 8);
     assert!(
         r.l8_violations.is_empty(),
         "L8 violated on scaled space: {:?}",
@@ -583,8 +590,12 @@ fn test_law_L9_scaled_space_joinable() {
         r.unique_nf_states, r.states,
         "every state must have a unique normal form"
     );
-    assert!(r.critical_pairs > 100_000, "scaled space must be exercised");
-    assert!(r.states > 100_000, "scaled space must be larger than 3x5");
+    assert_eq!(
+        r.states, 623_616,
+        "4 事件 × 6 座標宇宙(過 distinct-start 過濾)必須恰為 623,616 狀態 —— \
+         規模是這條測試的標的本身,不是附帶效果"
+    );
+    assert_eq!(r.critical_pairs, 635_424, "同上:臨界對計數必須恰為 635,424");
     assert!(r.threads >= 1, "parallel path must be honest about threads");
     assert!(!r.truncated, "no violations ⇒ nothing to truncate");
 }
@@ -628,12 +639,25 @@ fn ct_starts(s: &AState) -> Vec<(u32, u32)> {
 
 #[test]
 fn test_law_L9b_parallel_moves_exact_swap() {
-    // 宇宙:3 事件 × 6 座標(35,280 狀態)+ 4 事件 × 5 座標(105,216 狀態)。
+    // 宇宙:3 事件 × 6 座標(74,088 狀態)+ 4 事件 × 5 座標(810,000 狀態)。
     // 註:**不**加 distinct-start 過濾 —— 證明不該依赖新狀態的额外假設。
+    //
+    // 2026-09-03 健檢 §P3-9 更正:這段註解原本寫 **35,280 / 105,216**,那是
+    // `newman_check`(有 distinct-start 過濾)的狀態數,而本測試用的是
+    // `rep::enumerate_states`(**不過濾**),實測 74,088 / 810,000。
+    // ⇒ 測試其實比註解宣稱的強 2.1× / 7.7×,但註解誤導。狀態數現以
+    // `assert_eq!` 釘住,防止未來生成器靜默縮水而註解繼續說謊。
     let mut pairs = 0usize;
     let mut swaps = 0usize;
-    for (n, m) in [(3usize, 6u32), (4, 5)] {
-        for s in &rep::enumerate_states(n, m) {
+    for (n, m, expect_states) in [(3usize, 6u32, 74_088usize), (4, 5, 810_000)] {
+        let states = rep::enumerate_states(n, m);
+        assert_eq!(
+            states.len(),
+            expect_states,
+            "enumerate_states({n}, {m}) 未過濾的狀態數必須恰為 {expect_states} \
+             (註解曾誤用有過濾的數字)"
+        );
+        for s in &states {
             // (i) 側條件冗餘:CT 菜單上 Guarded 與 Raw 給出同一規則集
             //     ⇒ Rocq 可證 `applicable s CT Guarded = applicable s CT Raw`,
             //        L8 的 guard 在 CT 上是定理而非假設。

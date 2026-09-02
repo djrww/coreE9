@@ -40,3 +40,11 @@ lto = "fat"
 codegen-units = 1
 incremental = false
 debug = true
+
+# 測試專用 profile(2026-09-03,M5):L9 的 Newman 窮舉是純計算核心,
+# opt-level 0 會讓 4 事件 × 6 座標宇宙(623,616 狀態 / 635,424 臨界對)
+# 從 **6.6 s 變成 36.7 s**(實測 5.6×)。錨在 2 而非 3:保留 debug 可讀性
+# 與合理編譯時間,而速度已收回絕大部分。
+# 注意:[profile.bench] 獨立錨死 ⇒ 測試優化層級**不影響** bench/BASELINE.json。
+[profile.test]
+opt-level = 2

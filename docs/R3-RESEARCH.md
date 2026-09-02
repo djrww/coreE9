@@ -130,7 +130,7 @@ Iteration 4(Rocq Phase 3)—— 目標:R3 具體 WCR ⇒ R4 具體 CR 定理
 ```sh
 sh scripts/setup_dev.sh                       # coq + mathcomp + rust
 export PATH="$HOME/.cargo/bin:$PATH"
-cargo test --all                               # 47 具名測試(含本輪新增的 L9b′)
+cargo test --all                               # 50 具名測試(含本輪新增的 L9b′)
 make -C rocq && make -C rocq reconcile         # 鏡像 + 19 樣本點 kernel 複驗
 cargo build --release --examples
 ./target/release/examples/r3_probe  4 6 4 --nofilter

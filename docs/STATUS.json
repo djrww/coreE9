@@ -1,0 +1,102 @@
+{
+  "schema": "cl0r0-status/v1",
+  "generated_at_utc": "2026-09-02T22:21:26Z",
+  "note": "由 tools/gen_status.py 產生,請勿手改。CI 每次重新產生後由 tools/docs_check.py 稽核文件;本地重生成:python3 tools/gen_status.py",
+  "toolchain": {
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+    "coqc": "compiled with OCaml 5.3.0"
+  },
+  "tests": {
+    "unit": 17,
+    "integration": 33,
+    "total": 50
+  },
+  "coverage": {
+    "ast.rs": {
+      "lf": 415,
+      "lh": 319,
+      "ratio": 0.7687
+    },
+    "edit.rs": {
+      "lf": 97,
+      "lh": 96,
+      "ratio": 0.9897
+    },
+    "gen.rs": {
+      "lf": 260,
+      "lh": 258,
+      "ratio": 0.9923
+    },
+    "l9newman.rs": {
+      "lf": 202,
+      "lh": 197,
+      "ratio": 0.9752
+    },
+    "lex.rs": {
+      "lf": 206,
+      "lh": 193,
+      "ratio": 0.9369
+    },
+    "parse.rs": {
+      "lf": 983,
+      "lh": 951,
+      "ratio": 0.9674
+    },
+    "r0.rs": {
+      "lf": 1480,
+      "lh": 1337,
+      "ratio": 0.9034
+    },
+    "rep.rs": {
+      "lf": 245,
+      "lh": 222,
+      "ratio": 0.9061
+    },
+    "shrink.rs": {
+      "lf": 77,
+      "lh": 74,
+      "ratio": 0.961
+    },
+    "span.rs": {
+      "lf": 26,
+      "lh": 26,
+      "ratio": 1.0
+    },
+    "tree.rs": {
+      "lf": 60,
+      "lh": 58,
+      "ratio": 0.9667
+    }
+  },
+  "rocq": {
+    "files": 6,
+    "lines": 1536,
+    "admitted": 0,
+    "axiom": 0,
+    "reconcile_facts": 19,
+    "theory_files": [
+      "AbstractArs.v",
+      "ConcreteSN.v",
+      "ConcreteWCR.v",
+      "Mirror.v",
+      "WCRUtil.v",
+      "reconcile_gen.v"
+    ]
+  },
+  "universes": {
+    "newman_3x6": {
+      "states": 35280,
+      "critical_pairs": 10668
+    },
+    "newman_4x5": {
+      "states": 105216,
+      "critical_pairs": 100392
+    },
+    "newman_4x6": {
+      "states": 623616,
+      "critical_pairs": 635424
+    },
+    "enumerate_3x6_unfiltered": 74088,
+    "enumerate_4x5_unfiltered": 810000
+  }
+}
