@@ -140,6 +140,16 @@ jobs:
   coverage:
     name: coverage gate(core ≥ 90%,ast ≥ 75% 豁免)
     runs-on: ubuntu-latest
+    env:
+      # ★ 2026-09-03 實測:增量編譯會讓 llvm-cov 的**歸因失真**。
+      # 同一份碼、同一個 rustc 1.98.0 / cargo-llvm-cov 0.9.0 / x86_64,
+      # 本機量到 rep.rs 未覆蓋 [81,254,334,359,365],runner 卻是
+      # [81,182,183,184,185,187,254,334,359,365] —— 差的那 5 行正好是
+      # `Menu::label` 的 match arms。設 CARGO_INCREMENTAL=0 之後**兩邊完全一致**。
+      # 機制:小函式(`Menu::label` / `Edit::is_empty` / `Edit::shift`)是否被
+      # inline 取決於增量編譯的 CGU 分割,inline 掉之後行歸因就歸給呼叫者。
+      # rustc coverage book 亦建議量測覆蓋率時關閉增量。
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -218,6 +228,9 @@ jobs:
   docs-consistency:
     name: docs consistency(STATUS.json = 數字單一來源)
     runs-on: ubuntu-latest
+    env:
+      # 同 coverage job:覆蓋率量測必須關閉增量,否則數字不可移植。
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
 
