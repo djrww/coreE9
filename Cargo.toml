@@ -1,6 +1,6 @@
 [package]
 name = "cl0r0"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "CL0/R0 dual carrier: surface syntax trees, nine laws (L1-L9), mechanical self-verification"
 license = "MIT"

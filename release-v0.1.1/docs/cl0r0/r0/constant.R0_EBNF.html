@@ -1,0 +1,35 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="附錄 B:R₀ 的機讀 EBNF(本模組的語法契約)。"><title>R0_EBNF in cl0r0::r0 - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="cl0r0" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc constant"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">R0_EBNF</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../cl0r0/index.html">cl0r0</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><div id="rustdoc-modnav"><h2><a href="index.html">In cl0r0::<wbr>r0</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">cl0r0</a>::<wbr><a href="index.html">r0</a></div><h1>Constant <span class="constant">R0_EBNF</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/cl0r0/r0.rs.html#21-54">Source</a> </span></div><pre class="rust item-decl"><code>pub const R0_EBNF: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.98.0/std/primitive.str.html">str</a> = r#&quot;(* 附錄 B — R₀:實用載體。設計準則:落在 LALR(1) 可處理的片段內,歧義點以側條件排除。 *)
+program  = { item } ;
+item     = fn_item | struct_item ;
+fn_item  = &quot;fn&quot; IDENT &quot;(&quot; [ params ] &quot;)&quot; [ &quot;-&gt;&quot; type ] block ;
+struct_item = &quot;struct&quot; IDENT &quot;{&quot; [ field { &quot;,&quot; field } [&quot;,&quot;] ] &quot;}&quot; ;
+field    = IDENT &quot;:&quot; type ;
+params   = param { &quot;,&quot; param } ;
+param    = IDENT [ &quot;:&quot; type ] ;
+type     = IDENT | &quot;&amp;&quot; [ &quot;mut&quot; ] type | &quot;[&quot; type &quot;]&quot; ;
+block    = &quot;{&quot; { stmt } &quot;}&quot; ;
+stmt     = let_stmt | return_stmt | if_stmt | while_stmt | loop_stmt | expr_stmt ;
+let_stmt = &quot;let&quot; [ &quot;mut&quot; ] IDENT [ &quot;:&quot; type ] [ &quot;=&quot; expr ] &quot;;&quot; ;
+return_stmt = &quot;return&quot; [ expr ] &quot;;&quot; ;
+if_stmt  = &quot;if&quot; expr block [ &quot;else&quot; ( if_stmt | block ) ] ;
+while_stmt = &quot;while&quot; expr block ;
+loop_stmt = &quot;loop&quot; block ;
+expr_stmt = expr &quot;;&quot; ;
+expr     = assign ;
+assign   = or_expr [ &quot;=&quot; assign ] ;
+or_expr  = and_expr { &quot;||&quot; and_expr } ;
+and_expr = eq_expr { &quot;&amp;&amp;&quot; eq_expr } ;
+eq_expr  = rel_expr { ( &quot;==&quot; | &quot;!=&quot; ) rel_expr } ;
+rel_expr = add_expr { ( &quot;&lt;&quot; | &quot;&lt;=&quot; | &quot;&gt;&quot; | &quot;&gt;=&quot; ) add_expr } ; (* 側條件:無泛型 ⟹ &lt; 恆為比較 *)
+add_expr = mul_expr { ( &quot;+&quot; | &quot;-&quot; ) mul_expr } ;
+mul_expr = unary { ( &quot;*&quot; | &quot;/&quot; | &quot;%&quot; ) unary } ;
+unary    = [ ( &quot;&amp;&quot; | &quot;&amp;mut &quot; | &quot;*&quot; | &quot;!&quot; ) ] postfix ;
+postfix  = primary { &quot;.&quot; IDENT | &quot;[&quot; expr &quot;]&quot; | &quot;(&quot; [ args ] &quot;)&quot; } ;
+primary  = NUMBER | &quot;true&quot; | &quot;false&quot; | IDENT | &quot;(&quot; expr &quot;)&quot; | block ;
+args     = expr { &quot;,&quot; expr } ;
+(* 側條件(排除項,與歧義 / Type-2 邊界相關,由 `unsupported` 如實申報):
+   1. 無泛型實參:不存在 `&lt;Type&gt;` / `&gt;&gt;` 拆分歧義(§5.1 兩個非正則點之一被側條件排除);
+   2. 無宏 `!`、無閉包 `|…|`、無 `match` 模式、無 trait / impl / use / mod / pub / unsafe;
+   3. 無生命週期 `&#39;a`(raw string 內部除外)。                              *)
+&quot;#;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>附錄 B:R₀ 的機讀 EBNF(本模組的語法契約)。</p>
+</div></details></section></div></main></body></html>

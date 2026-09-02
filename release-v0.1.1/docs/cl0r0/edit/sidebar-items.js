@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["apply","apply_all","compose","compose_seq","is_pairwise_disjoint"],"struct":["Edit"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["EvKind","Track"],"fn":["conflict_graph_shape","conflicts","extract","greedy_chromatic","intervals","max_clique","red_edges","span_text"],"struct":["Binding","BorrowLink","Event","Facts","Interval","RedEdge"]};

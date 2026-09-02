@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["TokKind"],"fn":["lex","lexical_invariants"],"struct":["Token"]};
