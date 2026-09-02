@@ -155,6 +155,10 @@ CI(`.github/workflows/ci.yml` → job `rocq`):apt 裝 coq + mathcomp →
    驗證(如 `rep::apply` 無 panic),可作 Phase 6 選配。
 5. **本輪如實修正兩處文件口徑**:(a)「46 具名測試」→ 實跑 `cargo test --all` = 47
    (15 單元 + 32 集成;本輪新增 L9b′ 後為 32);(b) `docs/BENCH.md`/`bench/BASELINE.json`
-   所依託的 bench gate 在 CI(main @ b904921)與本地**同時紅**,原因非代碼回歸,而是
-   基線單機單次採樣 + 0.0005 ms 級指標的統計噪声 ⇒ 修法見 `docs/HARD-ITEMS.md` §#5。
-   在修好之前,本專案不得宣稱「全管線綠」。
+   所依託的 bench gate 曾在 CI 與本地**同時紅**(原因非代碼回歸:基線單機單次採樣
+   + µs 級指標以 median 判定)。2026-09-02 已修:`tools/bench_gate.py` 改採
+   **best-of-n** 判据 + `null` 環境標尺校正 + 同機 `--update` 基線 +
+   `tools/bench_gate_selftest.py`(9 情境判別力自測,掛 CI)。本沙箱實跑:
+   fmt/clippy/doc/test 47/47/reconcile 19 項/rocq/coverage/bench **全綠**。
+   **仍保留的限定**:CI runner 與基線不同機(4 核 vs 2 核),首次 CI 跑後需在
+   該機 `--update` 一次才算「同境基線」;在此之前不宣稱「全管線綠(含 CI)」。

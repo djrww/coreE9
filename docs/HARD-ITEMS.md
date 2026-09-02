@@ -139,6 +139,13 @@ CI 裡一個 20 分鐘的 job 會把「每次提交都跑形式化」變成人�
    `cur_median / best_of_n > 1 + tol` 且要求 `n ≥ 7`、report `min/median/max` 與 bootstrap CI;
    絕對值門檻改成「與**上一版基線**比較,基線隨 release 更新」;tiny 指標(<10 µs)
    標記為 `informational`(不判紅),或改測 throughput(每萬樣本毫秒)。
+   > ✅ **2026-09-02 已落地(除 bootstrap CI)**:實作時發現「median 判据」本身是
+   > 錯的 —— 同一份代碼三趟的 median 趟間 cv = 10–24%,必 flapping;改採
+   > **best-of-n(min,cv 0.3–3.3%)** 判紅,median 降為環境污染警告。另加
+   > `null` 環境標尺(跨機漂移 1.30× 可被完全抵消)、`--update` 同機刷基線、
+   > `--tiny-us` 保留 informational 開關(預設 0 = 全硬判)。判別力由
+   > `tools/bench_gate_selftest.py`(9 情境)固化,已掛 CI。**固有盲区**:所有內核
+   > 與 null 同步變慢時比值法無法區分,需用 `--assume-env-stable` 或重刷基線。
 2. **coverage 改「關鍵路徑覆蓋」**:除行覆蓋外,加「每條具名測試必須真的執行其聲稱的符號」
    —— 用 `#[cfg(test)]` 計數器或 `cov_gate.py` 的 per-symbol 檢查;豁免只准「列舉原因 + 行級白名單」。
 3. **數字單一來源(single source of truth)**:新增 `tools/gen_status.py`,由

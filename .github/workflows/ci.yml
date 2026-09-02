@@ -79,7 +79,7 @@ jobs:
         run: python3 tools/cov_gate.py target/coverage.lcov
 
   bench:
-    name: benchmark gate(hotpaths ±25%)
+    name: benchmark gate(hotpaths best-of-n ±25% −5% 雜訊下限 + null 漂移校正)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -94,7 +94,20 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p target
-          cargo bench --bench hotpaths 2>&1 | tee target/bench.log
+          cargo bench --bench hotpaths -- --reps 11 --newman-reps 5 2>&1 | tee target/bench.log
+
+      # 先自測 gate 本身的判別力(防止「修到永遠綠」),再判真實代碼
+      - name: Gate self-test(discriminative power)
+        run: python3 tools/bench_gate_selftest.py
 
       - name: Benchmark gate
         run: python3 tools/bench_gate.py target/bench.log bench/BASELINE.json --tol 0.25
+
+      # 失敗時可直接看原始統計(null 漂移、MAD),不必重跑
+      - name: Upload raw bench log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hotpaths-bench-log
+          path: target/bench.log
+          if-no-files-found: ignore

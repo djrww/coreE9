@@ -12,3 +12,4 @@ rocq/theories/*.glob
 coverage.lcov
 rocq/.lia.cache
 big_unfiltered.log
+__pycache__/
