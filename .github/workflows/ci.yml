@@ -154,8 +154,24 @@ jobs:
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
 
+      # 2026-09-03:本機與 runner 量到的**行表本身不同**(edit.rs 95 vs 97 行、
+      # rep.rs 238 vs 245),而 rustc / cargo-llvm-cov / 架構三者皆相同
+      # (1.98.0 / 0.9.0 / x86_64)。先把環境與報告原樣上傳,才好定位。
       - name: Collect coverage
-        run: cargo llvm-cov --lcov --output-path target/coverage.lcov
+        run: |
+          rustc --version
+          cargo llvm-cov --version
+          wc -l src/edit.rs src/rep.rs
+          cargo llvm-cov clean
+          cargo llvm-cov --lcov --output-path target/coverage.lcov
+
+      - name: Upload raw lcov (for cross-platform diffing)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: target/coverage.lcov
+          if-no-files-found: warn
 
       # 先自測 gate 判別力:空報告 / 模組缺席 / 同名 basename 都必須紅
       # (舊版對這些一律 exit 0 —— 門檻只在文件裡存在)
