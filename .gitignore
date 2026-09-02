@@ -13,3 +13,6 @@ coverage.lcov
 rocq/.lia.cache
 big_unfiltered.log
 __pycache__/
+
+# Coq lia cache(編譯副產物)
+.lia.cache

@@ -24,7 +24,7 @@
 | R4 | `newman_unf`(唯一正規形) | 同上 | ✅ 已證(推論) | L9a |
 | R4′ | `exists_normal_form`(正規形存在) | 同上 | ✅ 已證 | L8b(μ 保證終止) |
 | R2 | 具體 SN:`sn step_ct`(CommutativeTrim × Guarded)| `rocq/theories/ConcreteSN.v` | ✅ 已證(2026-09-02)| L8a/L8b(窮舉) |
-| R3 | 具體 WCR(交換引理 + 臨界對)— **數學核心** | `rocq/theories/WCRUtil.v`(輔助層已入庫)/ `ConcreteWCR.v`(待建)| 🔶 Phase 3 第二輪:`trim1_*` + `cut_for_is_filter` + `ct_pred_start_lt` 已 kernel 驗證;**原捷徑已否證**;倒掛宇宙實測不破壞精確交換但**不能**當前提;主定理未完成 | L9b 窮舉(4×6 共 623,616 狀態 × 635,424 臨界對,0 違反)+ **本輪前測:精確交換在未過濾 4×6(3,111,696 狀態 / 2,443,506 對)全綠** |
+| R3 | 具體 WCR(交換引理 + 臨界對)— **數學核心** | `rocq/theories/WCRUtil.v`(含 ③ fold_min_mem/cut_for_gt_start ✅)+ `rocq/theories/ConcreteWCR.v`(不變量機器 ✅ + ⑥⑦⑧ 交換/規則存活/主定理 ✅)| 🟢 **Raw 版完成**(2026-09-03 第四輪):`R3_ct_wcr_raw`(uniq_ids 前提,wf 不需要)kernel 驗證、Print Assumptions 潔淨;🔶 Guarded 版 WCR 與 R4_confluent 仍未證 | L9b 窮舉(4×6 共 623,616 狀態 × 635,424 臨界對,0 違反)+ 前測「精確交換」已由測試級晉升定理級(R3_ct_wcr_raw) |
 | R5 | L7b 迭代淨化終止 + 不動點 | — | ⬜ Phase 4 | L7b / `l7b_evaluate` |
 | R6 | T2 χ = ω(max_overlap = greedy_chromatic)| — | ⬜ Phase 5 | `test_theorem_T2_interval_graphs_are_perfect`(400 樣本) |
 | R7 | NaiveMenu 反例存在性 | — | ⬜ Phase 6(選配)| L9c 機器反例 |
@@ -105,15 +105,63 @@ a 從他人候選集移除」需要區間良構性 `istart ≤ iend`,並想用�
 全綠來自别的候選把 min 撐住,不是來自捷徑成立。所以**不能**把探針結果寫成定理前提,
 Rocq 側仍需「候選集變化 ⇒ min 不變」的刻畫。
 
-**未證(誠實申報,主定理仍未闭合)**:
-1. `cut_for_gt_start : cut_for l a = Some c → istart a <? c = true` —— 這是 wf
-   不變量與「剪到 cut 仍保持 `istart < iend`」的唯一缺口。**證明策略已設計完成**
-   (把 `fold_left`-min 轉寫成右折 `minopt`,證 `minopt f l = Some d → (∀ y ∈ l, P y) → P d`,
-   再證兩形等價),但 `fold_left` 在 Coq 8.20 下 `cbn` 會**過度約簡**掉
-   `match None with` 使 `injection` 無從注入(本輪在此卡住,已試 `cbn [fold_left]`、
-   `case_eq`、`destruct … eqn`、`revert` 各種組合)。
-2. `ct_join_exact` / `R3_ct_wcr` / `R4_ct_confluent`:未開工(`ConcreteWCR.v` 尚未建檔,
-   故意不建空檔)。
+~~原輪未證~~ → **第三輪(2026-09-03)進展,全部 kernel 驗證(SOTA 9 項
+`Print Assumptions` 全為 "Closed under the global context",無 `classic`):**
+
+1. ✅ **`cut_for_gt_start` 已封閉**(`WCRUtil.v` ③)。原計劃的「右折 minopt
+   改寫 + 兩形等價」**實作後證明不需要**:對 fold_left 歸納前先把累加器
+   **generalize 成抽象 `acc`**(`fold_min_mem`),cbn/simpl 就只對「列表是
+   cons」開一刀,具體 `None` 不在場 ⇒ 不存在「過度約簡 ⇒ injection 失敗」。
+   卡點的病根是「左折 + 具體初值 + cbn」的組合,不是 fold_left 本身。
+   新引理:`fold_min_mem`(min 左折的結果 ∈ 輸入 ∪ {初值})+
+   `cut_for_gt_start`(主定理,由 `ct_pred_start_lt` 收口)。
+2. ✅ **不變量機器已建**(`ConcreteWCR.v` ④,新檔,非空殼):
+   `wf_state` / `uniq_ids` / `ct_applicable_spec`(規則出身 = 某尾巴上的
+   cut_for)/ `ct_rules_are_r1` / `r1_apply_keeps`(id 與 istart 向量不變)/
+   `r1_apply_wf` / `uniq_map_eq` / `step_ct_spec` /
+   `ct_step_start_invariant` / `ct_step_preserves_uniq` /
+   `ct_step_preserves_wf` —— Iteration-4 清單第 2、3(前半)項**完成**。
+   附 `WfWitness` 模塊 4 個 `vm_compute` 證人(含「Guarded≡Raw」的實例複驗)。
+3. ✅/⬜ 見下方「第四輪」:`R3_ct_wcr_raw` 已落地(2026-09-03,同日);
+   `R4_ct_confluent` 與 Guarded 版仍未開工。
+
+---
+
+## 第四輪(2026-09-03 同日):R3 Raw 版 WCR 落地
+
+`rocq/theories/ConcreteWCR.v` 新增 ⑤~⑧ 段,全部 kernel 驗證,
+`Print Assumptions R3_ct_wcr_raw` = **"Closed under the global context"**
+(無 Axiom / Admitted / `classic`):
+
+- ⑤(已有)計算性證人模塊保持全綠。
+- ⑥ apply 層交換鏈:`r1_apply2`(兩步施作的純函數式)
+  / `r1_apply2_comm`(異 id 兩步可換序,**本輪最硬的等式證明**:
+  destruct-eqn 後 goal 會被 simpl 再生成新鮮條件子,收尾必須用頂層
+  eqn(EA/EB)再 rewrite 一次)/ `apply_r1_comm_ev`(事件列表層交換)。
+- ⑦ 規則存活鏈:`pred_trim_inv` / `ct_pred_self` / `cut_bounds`
+  (andb 五合取一律用 `repeat (apply andb_prop in H; destruct H as [? H])`
+  收斂,**Ltac peel 不安全**——匿名 destruct 會吃掉目標名)/ 
+  **`map_starts_filter_r1`**(取代原計劃的 filtered-list 逐字等式——
+  該敘述**數學上為假**:trim 只修剪 id 命中者的 iend,filter 留下的是
+  修剪後 record;一切不變性改走 istart 值列層)/ `fold_min_via_map`
+  (fold 融合,累加器抽象歸納)/ `cut_for_trim_other`(他人 cut 不變,
+  即前輪被否證引理的正確版本)/ `ct_menu_id_inj` / `ct_menu_cons`
+  (一步 definitional 展開,治 simpl 失靶)/ `ct_rule_survives`
+  (施作後他人規則仍在菜單——依賴 `uniq_map_eq`,**uniq 前提的真正用處**)。
+- ⑧ 主定理 **`R3_ct_wcr_raw`**:
+  `forall s sa sb, uniq_ids s -> step_ct_raw s sa -> step_ct_raw s sb ->
+   joinable step_ct_raw sa sb`。
+  - 如實修正前輪口徑:**wf 前提本路線不需要**(cut_bounds 鏈自給自足);
+    `uniq_ids` 不可省(重複 id 讓同名多 cut 規則破壞精確交換;
+    枚舉宇宙由 D5 構造唯一,故前測全綠與此不矛盾)。
+  - 證明結構:同 id ⇒ uniq 下 `ct_menu_id_inj` 得參數相等 ⇒ 兩邊同態;
+    異 id ⇒ `apply_r1_comm_ev` 給共同中點,兩側各補一步
+    (存在性用 `r1_apply_some` + `r1_apply_keeps` 的 id-map 不變性;
+    合法性用 `ct_rule_survives`)。
+- 仍未完成(不虛報):**Guarded 版** step_ct 的 WCR(需「修剪只刪紅邊」
+  的遞減計量,或先證 Guarded≡Raw 於可達態)、**R4_ct_confluent**
+  (newman + R2 + R3 的組裝,需先把 R3 接到 Guarded 或論證 Raw 足夠)、
+  唯一正規形推論。ROADMAP Phase 3 行改標「Raw 完成 / Guarded·R4 進行中」。
 
 **工程教訓(供後續輪次省時,已寫進 `WCRUtil.v` 頭註)**:
 1. `nth_error` 按 nat 遞歸,遇到未約簡的 `trim_at q i c` 即卡死 ⇒ 改走
@@ -179,11 +227,15 @@ CI(`.github/workflows/ci.yml` → job `rocq`):apt 裝 coq + mathcomp →
 2. R1 是「抽象」定理,其 `sn` 前提已由 R2 對接到鏡像的具體菜單
    (`R2_sn_step_ct`);`wcr` 前提仍未對接 —— 這是 Phase 3(R3)的任務。
    在此之前不宣稱「任意狀態的合流」(僅有 4×6 窮舉證人)。
-2b. **Phase 3 目前只到輔助層**:`WCRUtil.v` 的 `trim1_*` 是純結構事實,
-   **不是** R3 定理;R3 主定理(`ct_join_exact`/`R3_ct_wcr`)與 R4 推論
-   (`R4_ct_confluent`)尚未寫成,且原計劃依賴的「他人 cut 不變」引理已被
-   本輪**否證**(見 §一-R3 Rocq 開工)。故 ROADMAP 的 Phase 3 行仍是
-   「進行中」,不得寫成完成。
+2b. **Phase 3 的 R3 主定理:Raw 版已落地(2026-09-03 第四輪)**:
+   `R3_ct_wcr_raw : forall s sa sb, uniq_ids s -> step_ct_raw s sa ->
+   step_ct_raw s sb -> joinable step_ct_raw sa sb`,Print Assumptions 潔淨。
+   **但**:這是 **Raw(未過濾)步關係** 的定理,且以 `uniq_ids` 為前提;
+   **Guarded 版 WCR、R4_ct_confluent、唯一正規形推論仍未證**。
+   在此之前不宣稱「Guarded 鏡像任意狀態的合流」。原第三輪寫下的
+   「他人 cut 不變」否證依然有效——最終落地的是其修正版
+   `cut_for_trim_other`(走 istart 值列層,不走 filtered-list 逐字等式;
+   後者經證實**數學上為假**)。
 3. 環境:沙箱快照不保留 `~/.rustup` 與 `/usr/local` 下的工具;
    `scripts/setup_dev.sh` 一鍵重建(apt 需 sudo;Rust 工具鏈重裝約 10 秒)。
 4. `rocq-of-rust` 路線未採用(理由見 ROCQ-PLAN §4.2);若後續需要「實作層」

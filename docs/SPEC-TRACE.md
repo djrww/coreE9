@@ -102,7 +102,7 @@
 | §4.2 | L8:菜單每規則嚴格遞減 μ | `test_law_L8_red_edge_decreasing` | `rep::Menu` / `rep::Rule` | ✅ |
 | §4.2 | L8:μ ⇒ 終止保證 | `test_law_L8_measure_is_guaranteeing_termination` | `rep::Policy`(μ 計算) | ✅ |
 | §4.3 | L9:SN + WCR ⇒ CR(Newman)| `test_law_L9_unique_normal_form` + `test_law_L9_critical_pairs_joinable` | `l9newman::newman_check` | ✅ |
-| §4.3 | L9b′ 精確交換 + 側條件冗餘 + 紅邊單調(Rocq R3 的鏡面)| `test_law_L9b_parallel_moves_exact_swap` | `rep::{apply, Menu::applicable, AState::red_edges}` | ✅(Rust 窮舉)/ 🔶(Rocq 定理 Phase 3) |
+| §4.3 | L9b′ 精確交換 + 側條件冗餘 + 紅邊單調(Rocq R3 的鏡面)| `test_law_L9b_parallel_moves_exact_swap` | `rep::{apply, Menu::applicable, AState::red_edges}` | ✅(Rust 窮舉)/ ✅ Raw 版(`R3_ct_wcr_raw`,2026-09-03)/ 🔶 Guarded 版 WCR 仍待證 |
 | §4.3 | L9 反例通道(機器找反例)| `test_law_L9_naive_menu_finds_counterexample` | `rep::enumerate_states` | ✅ |
 | §4.4 | 錨定保持:事實攜帶可回跳 span | `test_law_L6_*`(錨位址並檢)| `ast`(事實層 span)| ✅ |
 | §5.1 | 詞法 DFA、平鋪、trivia 保留 | `test_law_L1_lexical_tiling` / `lex_lexical_invariants` | `lex::lex` | ✅ |

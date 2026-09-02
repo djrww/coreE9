@@ -6,7 +6,7 @@
 COQC    ?= coqc
 COQFLAGS ?= -Q theories Cl0r0 -w -deprecated-native-compiler-option -w -native-compiler-disabled
 
-THEORIES := theories/Mirror.v theories/WCRUtil.v theories/AbstractArs.v theories/ConcreteSN.v
+THEORIES := theories/Mirror.v theories/WCRUtil.v theories/AbstractArs.v theories/ConcreteSN.v theories/ConcreteWCR.v
 
 all: $(THEORIES:.v=.vo)
 

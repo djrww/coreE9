@@ -38,8 +38,12 @@ if ! command -v cargo >/dev/null 2>&1; then
     echo "== installing rust toolchain (rustup) =="
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       -o /tmp/rustup-init.sh
+    # 2026-09-03 修:rustup-init ≥1.28 不再接受位置參數形式的組件名
+    # (「unexpected argument 'rustfmt'」);改為安裝後 rustup component add。
     CARGO_HOME="$REAL_HOME/.cargo" RUSTUP_HOME="$REAL_HOME/.rustup" \
-      sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable rustfmt clippy
+      sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable
+    CARGO_HOME="$REAL_HOME/.cargo" RUSTUP_HOME="$REAL_HOME/.rustup" \
+      "$REAL_HOME/.cargo/bin/rustup" component add rustfmt clippy
   fi
   PATH="$REAL_HOME/.cargo/bin:$PATH"; export PATH
 fi

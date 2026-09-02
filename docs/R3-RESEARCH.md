@@ -95,14 +95,24 @@
 
 ```
 Iteration 4(Rocq Phase 3)—— 目標:R3 具體 WCR ⇒ R4 具體 CR 定理
+ 0. ★ 前置(2026-09-03 完成):`cut_for_gt_start` 封閉(WCRUtil ③,
+    fold_min_mem 以「累加器 generalization」解掉 fold_left+cbn 死結)+
+    `ConcreteWCR.v` 不變量機器(ct_applicable_spec / ct_step_start_invariant /
+    ct_step_preserves_uniq / ct_step_preserves_wf;9 定理 Print Assumptions 全潔淨)+
+    外部交叉驗證上線(docs/EXTERNAL-XCHECK.md:Maude 全宇宙五性質綠、
+    倒掛宇宙 P2 綠、NaTT R1 超集終止 YES)。
  1. 鏡像收斂:把 §2.4 的「過濾僅限樣本」寫進 ROCQ-TRACE;鏡像補一條
     `ct_applicable_guard_redundant` 引理(Guarded = Raw on CT)。            [1 人日]
- 2. 核心引理 1(起點不變):`ct_step_start_invariant` —— R1Shorten 只寫 iend。  [1–2 人日]
- 3. 核心引理 2(候選集單調):修剪只刪他人事件,不新增 ⇒ `cut_for` 值域單調;
-    配合 2 得「他人 cut 不變」⇒ `red_edges` 只減。                          [3–5 人日]
- 4. 交換引理:`ct_join_exact` —— 用 2+3 對兩事件是否相同做 case 分析(Rocq 端
-    把 2.2 的等式升級为 ∀)。                                                [3–5 人日]
- 5. R3 = WCR(由 4 一行推出)→ R4 = confluent(newman + R2 + R3)→ 唯一正規形定理。
+ 2. ✅(2026-09-03)`ct_step_start_invariant` 已證 —— 見 ConcreteWCR.v ④。
+ 3. ✅(2026-09-03 第四輪)候選集單調的落地形式與原計劃不同:原敘述
+    「filtered-list 逐字不變」經證實**數學為假**,改以 istart 值列層
+    (`map_starts_filter_r1` + `fold_min_via_map`)刻畫「他人 cut 不變」
+    (`cut_for_trim_other`)。紅邊遞減計量未建——Raw 路線不需要它。
+ 4. ✅(2026-09-03 第四輪)交換引理落地:apply 層 `r1_apply2_comm` +
+    `apply_r1_comm_ev`,規則層 `ct_rule_survives`(uniq 不可省)。
+ 5. ✅/⬜ R3 = **`R3_ct_wcr_raw` 已證**(uniq_ids 前提,wf 不需要;
+   Print Assumptions 潔淨)→ ⬜ Guarded 版 WCR、R4 = confluent
+   (newman + R2 + R3)、唯一正規形定理仍待接出。
     同輪把 4×6 窮舉改成「同一結論」的對帳行,SPEC-TRACE 加列。                [2 人日]
  6. 備援(若 3/4 卡 > 4 人日):改寫成 peak-decreasingness(1 標籤)或
     「有限空間反射證書」;兩者都有先例(§一),且都在 Rocq 內可驗。            [3 人日]
