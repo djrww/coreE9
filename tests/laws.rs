@@ -727,6 +727,65 @@ fn test_law_L9b_parallel_moves_exact_swap() {
 }
 
 // ===========================================================================
+// §4.1 Policy 的邊界:Guarded 的側條件**不是**普遍冗冗的
+// ===========================================================================
+
+/// 「CT 菜單上 Guarded ≡ Raw」只在 **`runtime = []`** 的宇宙上成立。
+///
+/// 這是 2026-09-03 做 R1(Guarded 版 WCR)時發現的:`docs/R3-RESEARCH.md` 與
+/// `docs/ROCQ-TRACE.md` 把「Guarded≡Raw / 側條件冗餘」當成普遍事實引用,
+/// 但所有驗證它的宇宙(`rep::enumerate_states`、`examples/r3_wf` 的倒掛宇宙)
+/// **構造上 runtime 恆為空** —— 也就是說這個結論從未在 `runtime ≠ []` 的
+/// 狀態上被檢驗過。
+///
+/// 反例:唯一的紅邊被 `runtime` 抑制時,CT 的規範 cut 雖然消掉了區間重疊,
+/// 卻沒有消掉任何**紅邊** ⇒ µ = |E_red| 不變 ⇒ Guarded 濾掉該規則、Raw 保留。
+#[test]
+fn test_policy_guarded_is_not_redundant_when_runtime_suppresses_red_edge() {
+    let evs = vec![
+        Ev {
+            id: 0,
+            storage: 0,
+            kind: K::Mut,
+            it: Interval { start: 0, end: 10 },
+        },
+        Ev {
+            id: 1,
+            storage: 0,
+            kind: K::Sh,
+            it: Interval { start: 2, end: 4 },
+        },
+    ];
+    let mut s = AState::new(evs);
+    s.runtime = vec![(0, 1)];
+
+    // 這條邊本該是紅邊(Mut/Sh 衝突、區間相交、同 storage),但被 runtime 移出 E_red。
+    assert!(
+        s.red_edges().is_empty(),
+        "前提:runtime 已把唯一紅邊移出 E_red"
+    );
+
+    let raw = Menu::CommutativeTrim.applicable(&s, Policy::Raw);
+    let guarded = Menu::CommutativeTrim.applicable(&s, Policy::Guarded);
+
+    assert_eq!(
+        raw,
+        vec![Rule::R1Shorten(0, 2)],
+        "Raw:CT 仍產生「把 a 剪到 b 的起點」的規範規則"
+    );
+    assert!(
+        guarded.is_empty(),
+        "Guarded:剪完之後 |E_red| 仍是 0(0 → 0 不嚴格遞減)⇒ 側條件濾掉它。\
+         「Guarded≡Raw」在此不成立 —— 這是 R3 路線不能拿集合相等當捷徑的原因"
+    );
+
+    // 且該規則確實改變了狀態(不是 no-op):剪完 [0,10) → [0,2),與 b 不再相交。
+    let s2 = rep::apply(&s, Rule::R1Shorten(0, 2)).expect("R1Shorten 應適用");
+    assert_eq!(s2.evs[0].it.end, 2, "規範 cut 確實施加了(剪到 b 的起點)");
+    assert!(s2.red_edges().is_empty(), "但紅邊數沒變 ⇒ µ 不遞減");
+}
+
+// ===========================================================================
 // 編輯單體(§2.1):M1 單位元、M2 位移複合 = 平移量之和、M3 結合律、M4 應用一致
 // ===========================================================================
 

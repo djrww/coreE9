@@ -224,3 +224,102 @@ fn test_r3_guarded_equals_raw_as_sets_on_inverted_universe() {
         diverge.join("\n")
     );
 }
+
+/// WCR 對 **Guarded** 單步在 `runtime ≠ []` 的宇宙上是否仍成立。
+///
+/// 為什麼要這條:`tests/laws.rs` 的 `test_policy_guarded_is_not_redundant_...`
+/// 證明了「Guarded ≡ Raw」**不是普遍事實**(runtime 抑制紅邊時兩者分歧,
+/// 實測 8,000 個宇宙狀態 × 單條 runtime 標記中有 4,680 個分歧)。
+/// ⇒ R3 的 Guarded 版 WCR **不能**走「集合相等 ⇒ step_ct = step_ct_raw」的捷徑,
+/// 必須另外論證。本測試先把「結論本身是否仍為真」量出來:
+/// 若這裡出現違反,Rocq 側的 `R3_ct_wcr` 就必須帶額外前提(而非現在的無條件)。
+///
+/// 實測(2026-09-03):1,590 個 Guarded peers,不可回合 **0**。
+#[ignore = "夜間規模(8,000 狀態 × 3 條 runtime 標記);cargo test --release -- --ignored"]
+#[test]
+fn test_r3_guarded_wcr_holds_even_with_runtime() {
+    let base = enumerate_states(3, 4);
+    assert_eq!(base.len(), 8_000, "3 事件 × 座標 0..=4 的宇宙規模");
+
+    let mut diverge = 0usize;
+    let mut peers = 0usize;
+    let mut violations: Vec<String> = Vec::new();
+
+    for st in &base {
+        let n = st.evs.len();
+        let mut edges = Vec::new();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                edges.push((
+                    st.evs[i].id.min(st.evs[j].id),
+                    st.evs[i].id.max(st.evs[j].id),
+                ));
+            }
+        }
+        for e in &edges {
+            let mut s = st.clone();
+            s.runtime = vec![*e];
+            let g = Menu::CommutativeTrim.applicable(&s, Policy::Guarded);
+            if g != Menu::CommutativeTrim.applicable(&s, Policy::Raw) {
+                diverge += 1;
+            }
+            for x in 0..g.len() {
+                for y in (x + 1)..g.len() {
+                    let (Some(a), Some(b)) = (apply(&s, g[x]), apply(&s, g[y])) else {
+                        continue;
+                    };
+                    peers += 1;
+                    if key(&a) == key(&b) {
+                        continue;
+                    }
+                    if !joinable_guarded(&a, &b, 3) && violations.len() < 3 {
+                        violations.push(format!(
+                            "runtime={:?} s={:?}",
+                            s.runtime,
+                            s.evs.iter().map(|v| (v.id, v.it)).collect::<Vec<_>>()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        diverge, 4_680,
+        "runtime 非空時 Guarded 與 Raw 分歧的狀態數(側條件**不**普遍冗餘)"
+    );
+    assert_eq!(peers, 1_590, "Guarded 單步的 peers 計數");
+    assert!(
+        violations.is_empty(),
+        "Guarded 單步的 WCR 應成立(即使 runtime 非空);違反:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// 兩個狀態在 Guarded 單步關係下是否可回合(深度限制內的可達集相交)。
+fn joinable_guarded(a: &AState, b: &AState, depth: usize) -> bool {
+    fn reachable(
+        s: &AState,
+        depth: usize,
+        seen: &mut BTreeSet<Vec<(u32, u32, u32, u32)>>,
+    ) -> BTreeSet<Vec<(u32, u32, u32, u32)>> {
+        let mut out = BTreeSet::new();
+        if depth == 0 {
+            return out;
+        }
+        for r in Menu::CommutativeTrim.applicable(s, Policy::Guarded) {
+            let Some(t) = apply(s, r) else { continue };
+            let k = key(&t);
+            out.insert(k.clone());
+            if seen.insert(k.clone()) {
+                out.extend(reachable(&t, depth - 1, seen));
+            }
+        }
+        out
+    }
+    let mut sa = BTreeSet::new();
+    let mut sb = BTreeSet::new();
+    let ra = reachable(a, depth, &mut sa);
+    let rb = reachable(b, depth, &mut sb);
+    ra.intersection(&rb).next().is_some()
+}

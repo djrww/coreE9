@@ -173,10 +173,27 @@ Rocq 側仍需「候選集變化 ⇒ min 不變」的刻畫。
     異 id ⇒ `apply_r1_comm_ev` 給共同中點,兩側各補一步
     (存在性用 `r1_apply_some` + `r1_apply_keeps` 的 id-map 不變性;
     合法性用 `ct_rule_survives`)。
-- 仍未完成(不虛報):**Guarded 版** step_ct 的 WCR(需「修剪只刪紅邊」
-  的遞減計量,或先證 Guarded≡Raw 於可達態)、**R4_ct_confluent**
-  (newman + R2 + R3 的組裝,需先把 R3 接到 Guarded 或論證 Raw 足夠)、
-  唯一正規形推論。ROADMAP Phase 3 行改標「Raw 完成 / Guarded·R4 進行中」。
+- 仍未完成(不虛報):**Guarded 版** step_ct 的 WCR、**R4_ct_confluent**
+  (newman + R2 + R3 的組裝)、唯一正規形推論。ROADMAP Phase 3 行改標
+  「Raw 完成 / Guarded·R4 進行中」。
+
+  **2026-09-03:兩條既有路線的其中一條已被實測否決(不虛報)**。
+  上文寫的「或先證 Guarded≡Raw 於可達態」—— **無條件版為假**:
+  `runtime ≠ []` 時,CT 的規範 cut 可能只消掉區間重疊而不消掉任何紅邊,
+  遂被 Guarded 濾掉。實測 8,000 狀態 × 單條 runtime 標記中有 **4,680** 個分歧
+  (反例與測試見 `docs/R3-RESEARCH.md` §2.2 註、`tests/laws.rs` 的
+  `test_policy_guarded_is_not_redundant_when_runtime_suppresses_red_edge`)。
+  若「可達態」意指 `runtime = []`(CT 菜單不改 runtime,`enumerate_states`
+  生成的狀態亦為空),則該捷徑可用;否則必須走第二條路線。
+
+  **剩下那條路線(已確認可行,尚未形式化)**:直接論證鑽石的兩條補步仍為
+  Guarded。核心是「兩條規則移除的紅邊集合互斥」——
+  `ra` 只動 `ia`、故只移除涉及 `ia` 的邊;`rb` 只動 `ib`、只移除涉及 `ib` 的邊;
+  交集只可能是邊 `(ia, ib)`,而「`ra` 移除它」⇒ `istart ia < istart ib`,
+  「`rb` 移除它」⇒ `istart ib < istart ia`,兩者矛盾 ⇒ 交集為空。
+  配合「兩規則皆 Guarded ⇒ 各移除 ≥1 條」,得 `|E_red(c)| < |E_red(sa)|`。
+  需要新建的基建:`red_edges_aux` 的成員刻畫、`uniq_ids` 下的 `NoDup`、
+  以及「縮短只刪不增」的單調性(估 200–400 行)。
 
 **工程教訓(供後續輪次省時,已寫進 `WCRUtil.v` 頭註)**:
 1. `nth_error` 按 nat 遞歸,遇到未約簡的 `trim_at q i c` 即卡死 ⇒ 改走
@@ -255,7 +272,7 @@ CI(`.github/workflows/ci.yml` → job `rocq`):apt 裝 coq + mathcomp →
    `scripts/setup_dev.sh` 一鍵重建(apt 需 sudo;Rust 工具鏈重裝約 10 秒)。
 4. `rocq-of-rust` 路線未採用(理由見 ROCQ-PLAN §4.2);若後續需要「實作層」
    驗證(如 `rep::apply` 無 panic),可作 Phase 6 選配。
-5. **本輪如實修正兩處文件口徑**:(a)「46 具名測試」→ 實跑 `cargo test --all` = 50
+5. **本輪如實修正兩處文件口徑**:(a)「46 具名測試」→ 實跑 `cargo test --all` = 51
    (15 單元 + 32 集成;本輪新增 L9b′ 後為 32);(b) `docs/BENCH.md`/`bench/BASELINE.json`
    所依託的 bench gate 曾在 CI 與本地**同時紅**(原因非代碼回歸:基線單機單次採樣
    + µs 級指標以 median 判定)。2026-09-02 已修:`tools/bench_gate.py` 改採

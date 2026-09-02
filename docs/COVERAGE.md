@@ -1,7 +1,7 @@
 # 覆蓋率報告與門檻(COVERAGE)
 
 > 採集:`cargo llvm-cov --lcov`(llvm-tools-preview + cargo-llvm-cov 0.9.0;零依賴庫不變)。
-> 執行面:全部庫測試(**17** 具名測試)+ 集成矩陣(`tests/laws.rs`,**33** 條)= **50**。
+> 執行面:全部庫測試(**17** 具名測試)+ 集成矩陣(`tests/laws.rs`,**34** 條)= **51**。
 > 門檻紅線:`tools/cov_gate.py`(CI job `coverage` 強制執行)。
 
 ## 一、現況(第二迭代,2026-09-02)
