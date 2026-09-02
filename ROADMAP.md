@@ -58,7 +58,7 @@
 
 | # | 工作項 | 內容 | 工作量 |
 |---|---|---|---|
-| 12 | **形式化證明** | Lean/Coq/Rocq 重證核心:Newman 引理(現為測試級)、L7b 迭代淨化於切縫終止、T2 區間圖完美性;與 Rust 側對帳 | XL | **進行中(路線 A)**:`docs/ROCQ-PLAN.md`(計劃)+ `docs/ROCQ-TRACE.md`(對帳)。**Phase 0–2 ✅**(2026-09-02):鏡像(Mirror.v,D1–D6)+ 對帳框架(19 樣本點 kernel 複驗,抓出並修正 R4 runtime 順序分歧)+ 抽象 Newman(R1/R4)+ **具體 SN(R2:CommutativeTrim × Guarded 之 step_ct 強正規化,µ=|E_red|)**。**Phase 3(R3 具體 WCR → 任意狀態合流)已開工前置完成(2026-09-02)**:文獻搜查 + 探針前測見 `docs/R3-RESEARCH.md`(精確交換在 2,443,506 對上全綠;Guarded≡Raw;紅邊單調),`docs/HARD-ITEMS.md` 為難度與驗收計劃 |
+| 12 | **形式化證明** | Lean/Coq/Rocq 重證核心:Newman 引理(現為測試級)、L7b 迭代淨化於切縫終止、T2 區間圖完美性;與 Rust 側對帳 | XL | **進行中(路線 A)**:`docs/ROCQ-PLAN.md`(計劃)+ `docs/ROCQ-TRACE.md`(對帳)。**Phase 0–2 ✅**(2026-09-02):鏡像(Mirror.v,D1–D6)+ 對帳框架(19 樣本點 kernel 複驗,抓出並修正 R4 runtime 順序分歧)+ 抽象 Newman(R1/R4)+ **具體 SN(R2:CommutativeTrim × Guarded 之 step_ct 強正規化,µ=|E_red|)**。**Phase 3(R3 具體 WCR → 任意狀態合流)進行中(2026-09-02)**:文獻搜查 + 探針前測見 `docs/R3-RESEARCH.md`(精確交換在 2,443,506 對上全綠;Guarded≡Raw;紅邊單調);Rocq 輔助層 `rocq/theories/WCRUtil.v`(`trim1` 成對歸納三引理 + 修剪語義的 vm_compute 事實)已入庫並掛進 `make`;**原計劃的「start 不變 ⇒ 他人 cut 不變」捷徑已被否證**(`ct_pred` 含 `istart a <? iend b`),主定理 `ct_join_exact`/`R3_ct_wcr`/`R4_ct_confluent` 仍為開放,詳 `docs/ROCQ-TRACE.md` §一-R3、`docs/ROCQ-PLAN.md` §三-R3 |
 | 13 | **定律語義化報告** | 把 fuzz 的統計型檢查升級為「生成式證明」:每輪記錄證人,匯出 `docs/REPORT.md` 機器可讀 | L | **已裁決(非 Rocq 前置)**:擱置;理由見 ROCQ-PLAN §5.1;極小版可排 Phase 5 後 |
 
 ---
@@ -69,7 +69,8 @@
 第一迭代 ✅(110b1ff):P0 #1 #2 + P1 #5 #8   → 補平誠實缺口,CI 固化成紀律
 第二迭代 ✅(0950906):P0 #3 #4 + P1 #6 #7   → 反例最小化 + 規模擴張 + 門檻
 第三迭代 ✅(b904921):P3 #12 Phase 0–2   → 鏡像 + 抽象 Newman + 具體 SN + 對帳框架
-第四迭代(進行中):P3 #12 Phase 3(R3 WCR)→ 前測完成(docs/R3-RESEARCH.md);
+第四迭代(進行中):P3 #12 Phase 3(R3 WCR)→ 前測完成(docs/R3-RESEARCH.md)
+                  + Rocq 輔助層 WCRUtil.v 入庫 + 原捷徑否證(docs/ROCQ-TRACE.md);
                   併入 #4/#5 兩項工程修復(CI 環境可重建 + 門檻可信度)
 按需            :P2 #9 #10                → 增量編輯器 demo / LSP,對外可用
 ```

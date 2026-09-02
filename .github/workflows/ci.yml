@@ -36,7 +36,7 @@ jobs:
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 
   rocq:
-    name: rocq gate(Phase 0/1:mirror + Newman + 對帳)
+    name: rocq gate(Phase 0–3:mirror + WCRUtil + Newman + 對帳)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

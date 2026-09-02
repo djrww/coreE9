@@ -7,3 +7,8 @@ rocq/theories/*.vok
 rocq/theories/*.vos
 rocq/theories/.*.aux
 rocq/theories/*.glob
+
+# 本地量測/覆蓋產物(不入庫:由 gate 工具生成)
+coverage.lcov
+rocq/.lia.cache
+big_unfiltered.log

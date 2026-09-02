@@ -24,7 +24,7 @@
 | R4 | `newman_unf`(唯一正規形) | 同上 | ✅ 已證(推論) | L9a |
 | R4′ | `exists_normal_form`(正規形存在) | 同上 | ✅ 已證 | L8b(μ 保證終止) |
 | R2 | 具體 SN:`sn step_ct`(CommutativeTrim × Guarded)| `rocq/theories/ConcreteSN.v` | ✅ 已證(2026-09-02)| L8a/L8b(窮舉) |
-| R3 | 具體 WCR(交換引理 + 臨界對)— **數學核心** | `rocq/theories/ConcreteWCR.v`(待建)| 🔶 Phase 3 開工(前測完成)| L9b 窮舉(4×6 共 623,616 狀態 × 635,424 臨界對,0 違反)+ **本輪前測:精確交換在未過濾 4×6(3,111,696 狀態 / 2,443,506 對)全綠** |
+| R3 | 具體 WCR(交換引理 + 臨界對)— **數學核心** | `rocq/theories/WCRUtil.v`(輔助層已入庫)/ `ConcreteWCR.v`(待建)| 🔶 Phase 3 開工:輔助層 `trim1_*` 已 kernel 驗證;**原捷徑已否證**,主定理未完成 | L9b 窮舉(4×6 共 623,616 狀態 × 635,424 臨界對,0 違反)+ **本輪前測:精確交換在未過濾 4×6(3,111,696 狀態 / 2,443,506 對)全綠** |
 | R5 | L7b 迭代淨化終止 + 不動點 | — | ⬜ Phase 4 | L7b / `l7b_evaluate` |
 | R6 | T2 χ = ω(max_overlap = greedy_chromatic)| — | ⬜ Phase 5 | `test_theorem_T2_interval_graphs_are_perfect`(400 樣本) |
 | R7 | NaiveMenu 反例存在性 | — | ⬜ Phase 6(選配)| L9c 機器反例 |
@@ -61,6 +61,34 @@ Acc 反向歸納恰給「∀a′, r a a′ → P a′」的推進 IH)。
 **鏡像決策 D7(新增)**:`enumerate_states` 不施加 distinct-start 過濾(過濾屬 Rust 側
 規模控制,見 `src/l9newman.rs`);前測顯示定理在此更強宇宙仍成立 ⇒ 鏡像保持無過濾,
 Rocq 定理的 ∀ 陳述亦不需該假設。
+
+### R3 Rocq 開工(2026-09-02,`rocq/theories/WCRUtil.v` 入庫)
+
+新增輔助層並掛進 `make -C rocq`(`THEORIES` 已加入 `theories/WCRUtil.v`)。
+**已 kernel 驗證**(無 `Admitted`/`Axiom`,`make -C rocq` 全綠):
+
+| 事實 | 內容 |
+|---|---|
+| `trim1_spec` | `trim1 i c l (trim_at l i c)` —— 用**成對歸納**精確刻畫修剪 |
+| `trim1_length` | 修剪不改變列表長度 |
+| `trim1_nth_other` | `k <> i ⇒ nth_error l' k = nth_error l k`(非修剪位逐字相同)|
+| `trim_at_trim_at_here` | 同位重剪:`trim_at (trim_ev e c :: t) 0 d = trim_ev e d :: t` |
+| 三個 `vm_compute` 事實 | `ct_pred evA evB = true`;`ct_pred (trim_ev evA 2) evB = false`;`ct_pred evA (trim_ev evB 1) = true` |
+
+**本輪最重要產出是「否證」**:原計劃 R3 的捷徑「start 不變 ⇒ 他人 `cut_for`
+不變」為**假** —— `Mirror.cut_for` 的候選謂語含 `istart a <? iend b`,故被剪者
+會從他人的候選集消失(上表第 6 列即此事實的計算證據)。改走的路線與剩餘缺口
+見 `docs/ROCQ-PLAN.md` §三-R3「開工實測」。
+
+**工程教訓(供後續輪次省時,已寫進 `WCRUtil.v` 頭註)**:
+1. `nth_error` 按 nat 遞歸,遇到未約簡的 `trim_at q i c` 即卡死 ⇒ 改走
+   成對歸納謂詞(`trim1`),不要在 `nth_error` 上疊 `cbn/simpl/native_compute`。
+2. Coq 的 conversion **不對不透明記錄做 eta**:`change (trim_ev b c) with b`
+   回報 `Not convertible` ⇒ 「只改 iend 的事件」必須真的寫成 constructor 形式,
+   或改用逐欄 `cbn [ev_id ev_storage ev_kind ev_it istart iend]`。
+3. `cbn in *` 會把假設約簡成 `True` 並被 `subst` 吞掉,錯誤訊息會指向**錯誤的一邊**
+   (本輪據此誤判 `i_overlap` 有額外合取項,白跑十餘回合)⇒ 用 `Show` 印目標,
+   別只讀錯誤文字。
 
 ## 二、鏡像決策(D1–D7,Phase 0-b)
 
@@ -116,6 +144,11 @@ CI(`.github/workflows/ci.yml` → job `rocq`):apt 裝 coq + mathcomp →
 2. R1 是「抽象」定理,其 `sn` 前提已由 R2 對接到鏡像的具體菜單
    (`R2_sn_step_ct`);`wcr` 前提仍未對接 —— 這是 Phase 3(R3)的任務。
    在此之前不宣稱「任意狀態的合流」(僅有 4×6 窮舉證人)。
+2b. **Phase 3 目前只到輔助層**:`WCRUtil.v` 的 `trim1_*` 是純結構事實,
+   **不是** R3 定理;R3 主定理(`ct_join_exact`/`R3_ct_wcr`)與 R4 推論
+   (`R4_ct_confluent`)尚未寫成,且原計劃依賴的「他人 cut 不變」引理已被
+   本輪**否證**(見 §一-R3 Rocq 開工)。故 ROADMAP 的 Phase 3 行仍是
+   「進行中」,不得寫成完成。
 3. 環境:沙箱快照不保留 `~/.rustup` 與 `/usr/local` 下的工具;
    `scripts/setup_dev.sh` 一鍵重建(apt 需 sudo;Rust 工具鏈重裝約 10 秒)。
 4. `rocq-of-rust` 路線未採用(理由見 ROCQ-PLAN §4.2);若後續需要「實作層」
