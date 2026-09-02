@@ -13,6 +13,7 @@
 //!   * `gen`   : 合法程式生成器 + 髒輸入生成器(屬性測試的輸入宇宙)
 //!   * `r0`    : R₀ Rust 子集 —— 附錄 B 覆蓋面契約 + 正則詞法 + unsupported 申報
 //!   * `l9newman` : 機械的 Newman 通道(終止 + 局部合流 ⇒ 合流 ⇒ 唯一正規形)
+//!   * `shrink` : 反例最小化(ddmin)—— fuzz 失敗時縮到最小反例,防回歸
 
 #![warn(missing_docs)]
 
@@ -24,5 +25,6 @@ pub mod lex;
 pub mod parse;
 pub mod r0;
 pub mod rep;
+pub mod shrink;
 pub mod span;
 pub mod tree;

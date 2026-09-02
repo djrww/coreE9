@@ -29,8 +29,49 @@ jobs:
       - name: clippy (deny warnings)
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: test(九律具名矩陣:L1–L9 / M1 M2 M4 M5 / T2 / R₀)
+      - name: test(九律具名矩陣:L1–L9 / M1 M2 M4 M5 / T2 / R₀ / 語義面 / 反例縮小)
         run: cargo test --all
 
       - name: rustdoc (deny warnings)
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+
+  coverage:
+    name: coverage gate(core ≥ 90%,ast ≥ 75% 豁免)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain + llvm tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Collect coverage
+        run: cargo llvm-cov --lcov --output-path target/coverage.lcov
+
+      - name: Coverage gate
+        run: python3 tools/cov_gate.py target/coverage.lcov
+
+  bench:
+    name: benchmark gate(hotpaths ±25%)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run hotpaths benchmark
+        run: cargo bench --bench hotpaths 2>&1 | tee target/bench.log
+
+      - name: Benchmark gate
+        run: python3 tools/bench_gate.py target/bench.log bench/BASELINE.json --tol 0.25

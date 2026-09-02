@@ -1,0 +1,4 @@
+fn k() {
+}
+fn f(r) {
+  let mut w =

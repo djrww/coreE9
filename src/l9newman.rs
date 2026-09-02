@@ -37,6 +37,10 @@ pub struct NewmanReport {
     pub multi_nf: Vec<(AState, Vec<AState>)>,
     /// 機器給出的結論(converges / WCR 違反)。
     pub conclusion: &'static str,
+    /// 並行分塊所使用的線程數(available_parallelism,上限 8)。
+    pub threads: usize,
+    /// 反例列表是否為報告目的截斷(計數字段 critical_pairs / states 永遠全量)。
+    pub truncated: bool,
 }
 
 fn canon_key(s: &AState) -> StateKey {
@@ -108,9 +112,79 @@ pub fn normal_forms(s: &AState, menu: Menu, policy: Policy, depth: usize) -> Vec
     nfs.into_iter().collect()
 }
 
+/// 單一狀態的 Newman 檢查(純函數;供並行分塊調用,無共享可變狀態)。
+struct ChunkResult {
+    l8: Vec<(AState, AState, Rule)>,
+    critical_pairs: usize,
+    non_joinable: Vec<(AState, Rule, Rule, AState, AState)>,
+    unique_ok: usize,
+    multi_nf: Vec<(AState, Vec<AState>)>,
+}
+
+fn check_state(s: &AState, menu: Menu, policy: Policy, depth: usize) -> ChunkResult {
+    let mut l8 = Vec::new();
+    let mut critical_pairs = 0usize;
+    let mut non_joinable = Vec::new();
+    let mut unique_ok = 0usize;
+    let mut multi_nf = Vec::new();
+    if let Some(v) = l8_check(s, menu, policy) {
+        l8.push(v);
+    }
+    let rules = menu.applicable(s, policy);
+    let mut x = 0usize;
+    while x < rules.len() {
+        let mut y = x + 1;
+        while y < rules.len() {
+            critical_pairs += 1;
+            if let (Some(a), Some(b)) = (apply(s, rules[x]), apply(s, rules[y])) {
+                if !joinable(&a, &b, menu, policy, depth) {
+                    non_joinable.push((s.clone(), rules[x], rules[y], a, b));
+                }
+            }
+            y += 1;
+        }
+        x += 1;
+    }
+    let nfs = normal_forms(s, menu, policy, depth);
+    if nfs.len() == 1 {
+        unique_ok += 1;
+    } else {
+        multi_nf.push((
+            s.clone(),
+            nfs.iter()
+                .map(|k| {
+                    // 重新構造狀態僅用於報告
+                    let evs = k
+                        .iter()
+                        .map(|&(id, storage, kind, st, en)| crate::rep::Ev {
+                            id,
+                            storage,
+                            kind,
+                            it: crate::ast::Interval { start: st, end: en },
+                        })
+                        .collect();
+                    AState::new(evs)
+                })
+                .collect(),
+        ));
+    }
+    ChunkResult {
+        l8,
+        critical_pairs,
+        non_joinable,
+        unique_ok,
+        multi_nf,
+    }
+}
+
 /// 機械 Newman 檢查:對菜單 × 政策做窮舉狀態空間上的
 /// L8(測度遞減)+ 臨界對可合流(§4.3)雙重驗證,輸出報告。
 /// 前提(報告 §4.2):μ 良基 ⇒ SN;SN ∧ WCR ⇒ CR ⇒ 唯一正規形。
+///
+/// **並行分塊**(P0 #4):狀態間檢查互不依賴,以 `std::thread::scope`
+/// 分塊並行(零依賴;線程數 = available_parallelism,上限 8)。
+/// 計數字段(critical_pairs / unique_nf_states / states)永遠全量;
+/// 反例列表為報告可讀性截斷(每類上限 64),`truncated` 如實標記。
 pub fn newman_check(
     menu: Menu,
     policy: Policy,
@@ -129,57 +203,62 @@ pub fn newman_check(
         })
         .collect();
 
+    let n = states.len();
+    let threads = std::thread::available_parallelism()
+        .map(|t| t.get())
+        .unwrap_or(1)
+        .clamp(1, 8)
+        .min(n.max(1));
+    let chunk = n.div_ceil(threads).max(1);
+
+    let mut results: Vec<ChunkResult> = Vec::with_capacity(threads);
+    std::thread::scope(|sc| {
+        let handles: Vec<_> = states
+            .chunks(chunk)
+            .map(|part| {
+                sc.spawn(move || {
+                    part.iter()
+                        .map(|s| check_state(s, menu, policy, depth))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for h in handles {
+            for r in h.join().expect("newman worker must not panic") {
+                results.push(r);
+            }
+        }
+    });
+
     let mut l8_violations = Vec::new();
     let mut critical_pairs = 0usize;
     let mut non_joinable = Vec::new();
     let mut unique_ok = 0usize;
     let mut multi_nf = Vec::new();
-
-    for s in &states {
-        if let Some(v) = l8_check(s, menu, policy) {
-            l8_violations.push(v);
-        }
-        let rules = menu.applicable(s, policy);
-        let mut x = 0usize;
-        while x < rules.len() {
-            let mut y = x + 1;
-            while y < rules.len() {
-                critical_pairs += 1;
-                if let (Some(a), Some(b)) = (apply(s, rules[x]), apply(s, rules[y])) {
-                    if !joinable(&a, &b, menu, policy, depth) {
-                        non_joinable.push((s.clone(), rules[x], rules[y], a, b));
-                    }
-                }
-                y += 1;
+    let mut truncated = false;
+    for r in results {
+        critical_pairs += r.critical_pairs;
+        unique_ok += r.unique_ok;
+        for v in r.l8 {
+            if l8_violations.len() < 64 {
+                l8_violations.push(v);
+            } else {
+                truncated = true;
             }
-            x += 1;
         }
-        if non_joinable.len() > 32 {
-            // 已找到足夠反例
-            break;
+        for v in r.non_joinable {
+            if non_joinable.len() < 64 {
+                non_joinable.push(v);
+            } else {
+                truncated = true;
+            }
         }
-        let nfs = normal_forms(s, menu, policy, depth);
-        if nfs.len() == 1 {
-            unique_ok += 1;
-        } else {
-            multi_nf.push((
-                s.clone(),
-                nfs.iter()
-                    .map(|k| {
-                        // 重新構造狀態僅用於報告
-                        let evs = k
-                            .iter()
-                            .map(|&(id, storage, kind, st, en)| crate::rep::Ev {
-                                id,
-                                storage,
-                                kind,
-                                it: crate::ast::Interval { start: st, end: en },
-                            })
-                            .collect();
-                        AState::new(evs)
-                    })
-                    .collect(),
-            ));
+        for v in r.multi_nf {
+            if multi_nf.len() < 64 {
+                multi_nf.push(v);
+            } else {
+                truncated = true;
+            }
         }
     }
 
@@ -203,5 +282,7 @@ pub fn newman_check(
         unique_nf_states: unique_ok,
         multi_nf,
         conclusion,
+        threads,
+        truncated,
     }
 }

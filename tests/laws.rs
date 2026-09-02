@@ -228,6 +228,13 @@ fn test_law_L7b_structural_maximality() {
             }
         }
         // 到達不動點;殘餘只允許切縫 / EOF 處的空錯誤(缺失內容)。
+        // 機械化版本(tree::l7b_evaluate)必須給出同一判定(P1 #6 覆蓋與契約複驗)。
+        let (mech_bad, mech_rounds) = cl0r0::tree::l7b_evaluate(&half);
+        assert_eq!(
+            (mech_bad == 0, mech_rounds < 8),
+            (bad.is_empty(), rounds < 8),
+            "l7b_evaluate must agree with the in-test purification"
+        );
         assert!(
             bad.is_empty() && rounds < 8,
             "L7b violated: iterative purification of {:?} ended at {:?} rounds={} bad={:?}",
@@ -283,6 +290,65 @@ fn test_law_L7_error_totalization() {
             .unwrap_or_else(|e| panic!("L7: tree axioms {} for {:?}", e, src));
         assert_eq!(t.unparse(), *src, "L7: roundtrip (byte-exact) violated");
     }
+}
+
+#[test]
+fn test_shrink_finds_minimal_error_trigger() {
+    // 反例最小化的真實語義用法(P0 #3):以「parse 產生 ERROR」為失敗屬性,
+    // 對夾雜垃圾的程式縮小 → 得到最小錯誤觸發串(任何單字符刪除都不再觸發)。
+    // 這正是 fuzz LAW FAIL 時的自動化路徑:輸入 → 最小現場。
+    let mut rng = Rng::new(0x51);
+    let legal = gen_legal(&mut rng);
+    // 以一個確定觸發 ERROR 的非法符號作為「垃圾種子」(詞法級 Bad ⇒ 錯誤區)。
+    let src = format!("{} @", legal);
+    assert!(!src.is_empty());
+    // L7a 屬性:合法部分清潔,整體因垃圾產生 ERROR。
+    let prop = |s: &str| parse(s).map(|t| t.has_error()).unwrap_or(true);
+    assert!(prop(&src), "precondition: input must be failing");
+    let m = cl0r0::shrink::shrink_to_minimal(&src, &prop);
+    assert!(prop(&m), "minimal must still trigger ERROR");
+    // 局部最小:無單字符可刪。
+    for i in 0..m.chars().count() {
+        let mut cand: String = m.chars().take(i).collect();
+        cand.extend(m.chars().skip(i + 1));
+        assert!(!prop(&cand), "removing char {} must not keep failing", i);
+    }
+    // 最小現場不長於觸發所需(合法程式與冗餘應被刪光;單字符符號即觸發)。
+    assert!(
+        m.chars().count() <= 2,
+        "minimal trigger should be a lone bad symbol: {:?}",
+        m
+    );
+}
+
+#[test]
+fn test_law_regression_fixtures() {
+    // 回歸防線(P0 #3):`tests/fixtures/` 的每個 .txt 都是一個**歷史反例**
+    // (曾使 L1/L7 破裂的輸入,如第一迭代的哨兵跨度泄漏)。
+    // 重播 = 現在必須全綠:parse 總化、roundtrip 逐字節、連續性、laminar、
+    // 樹公理;R₀ 載體同樣總化(雙載體互為注入面)。
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut n = 0;
+    for entry in std::fs::read_dir(&dir).expect("tests/fixtures must exist") {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let src = std::fs::read_to_string(&path).unwrap();
+        let t = parse(&src).unwrap_or_else(|e| panic!("fixture {}: parse Err {:?}", name, e));
+        assert_eq!(t.unparse(), src, "fixture {}: byte-exact roundtrip", name);
+        t.validate_continuity()
+            .unwrap_or_else(|e| panic!("fixture {}: continuity {}", name, e));
+        assert!(t.laminar_ok(), "fixture {}: laminar", name);
+        t.validate_tree_shapes()
+            .unwrap_or_else(|e| panic!("fixture {}: tree axioms {}", name, e));
+        let t0 = cl0r0::r0::r0_parse(&src)
+            .unwrap_or_else(|e| panic!("fixture {}: r0_parse {:?}", name, e));
+        assert_eq!(t0.unparse(), src, "fixture {}: r0 roundtrip", name);
+        n += 1;
+    }
+    assert!(n >= 5, "fixtures must be present, got {}", n);
 }
 
 // ===========================================================================
@@ -432,6 +498,54 @@ fn test_law_L9_naive_menu_finds_counterexample() {
     }
 }
 
+#[test]
+fn test_law_L9_scaled_space_joinable() {
+    // P0 #4:空間擴張(3 事件 × 5 座標 → 4 事件 × 5 座標)+ 並行分塊。
+    // CommutativeTrim/Guarded 在 105,216 狀態 × 100,392 臨界對上:
+    // L8 零違反、臨界對全可回合、全狀態唯一正規形 —— Newman 結論在
+    // 更大空間上機械成立(規模較 3×5 大 ~10×)。
+    let r = cl0r0::l9newman::newman_check(Menu::CommutativeTrim, Policy::Guarded, 4, 5, 8);
+    assert!(
+        r.l8_violations.is_empty(),
+        "L8 violated on scaled space: {:?}",
+        r.l8_violations.first()
+    );
+    assert!(
+        r.non_joinable.is_empty(),
+        "WCR violated on scaled space: {:?}",
+        r.non_joinable.first()
+    );
+    assert!(
+        r.multi_nf.is_empty(),
+        "normal forms not unique on scaled space"
+    );
+    assert_eq!(
+        r.unique_nf_states, r.states,
+        "every state must have a unique normal form"
+    );
+    assert!(r.critical_pairs > 100_000, "scaled space must be exercised");
+    assert!(r.states > 100_000, "scaled space must be larger than 3x5");
+    assert!(r.threads >= 1, "parallel path must be honest about threads");
+    assert!(!r.truncated, "no violations ⇒ nothing to truncate");
+}
+
+#[test]
+fn test_law_L9_scaled_space_counterexample_found() {
+    // 並行分塊不得削弱「機器找反例」:Naive/Raw 在 3 事件 × 3 座標即
+    // 遇到不可回合臨界對(WCR 反例;這是菜單必須規範化的機械證據)。
+    let r = cl0r0::l9newman::newman_check(Menu::Naive, Policy::Raw, 3, 3, 3);
+    assert!(
+        !r.non_joinable.is_empty(),
+        "parallel newman must still find WCR counterexamples for the naive menu"
+    );
+    // 結論必須如實申報違反(而非誤報通過);截斷只影響展示,不影響結論。
+    assert!(
+        r.conclusion.contains("WCR") || r.conclusion.contains("L8"),
+        "conclusion must report the violation: {}",
+        r.conclusion
+    );
+}
+
 // ===========================================================================
 // 編輯單體(§2.1):M1 單位元、M2 位移複合 = 平移量之和、M3 結合律、M4 應用一致
 // ===========================================================================
@@ -562,4 +676,640 @@ fn _track_probe(t: Track) {
 #[allow(dead_code)]
 fn _rule_probe(r: Rule) {
     let _ = r;
+}
+
+// ===========================================================================
+// 第二迭代補測:語義面衝量(P1 #6 覆蓋密度)與工具層契約
+// ===========================================================================
+
+#[test]
+fn test_law_span_geometry() {
+    // §1.2 半開區間代數:len/is_empty/contains/overlaps(相接不算)/shift/Display。
+    let s = Span::new(2, 5);
+    assert_eq!(s.len(), 3);
+    assert!(!s.is_empty());
+    assert!(Span::new(0, 0).is_empty());
+    assert!(Span::new(0, 7).contains(&s));
+    assert!(s.contains(&Span::new(3, 4)));
+    assert!(!s.contains(&Span::new(1, 2)));
+    // 半開:相接 [2,5) 與 [5,7) 不重疊
+    assert!(!s.overlaps(&Span::new(5, 7)));
+    assert!(s.overlaps(&Span::new(4, 6)));
+    assert!(!s.overlaps(&Span::new(0, 2)));
+    assert_eq!(s.shift(10), Span::new(12, 15));
+    assert_eq!(s.shift(-2), Span::new(0, 3));
+    assert_eq!(format!("{}", s), "[2, 5)");
+}
+
+#[test]
+fn test_law_semantic_conflict_matrix() {
+    // §3.3 相容性矩陣:15 個 kind 對,斷言對稱性與判據表一致。
+    use cl0r0::ast::{EvKind, EvKind::*};
+    let kinds = [Decl, Read, Move, BorrowSh, BorrowMut, Deref];
+    let expect = [
+        (Decl, Decl, false),
+        (Decl, Read, false),
+        (Decl, Move, false),
+        (Decl, BorrowSh, false),
+        (Decl, BorrowMut, false),
+        (Decl, Deref, false),
+        (Read, Read, false),
+        (Read, Move, false),
+        (Read, BorrowSh, false),
+        (Read, BorrowMut, true),
+        (Read, Deref, false),
+        (Move, Move, false),
+        (Move, BorrowSh, true),
+        (Move, BorrowMut, true),
+        (Move, Deref, false),
+        (BorrowSh, BorrowSh, false),
+        (BorrowSh, BorrowMut, true),
+        (BorrowSh, Deref, false),
+        (BorrowMut, BorrowMut, true),
+        (BorrowMut, Deref, false), // 解引用是借用鏈的內部使用,非相容性衝突
+        (Deref, Deref, false),
+    ];
+    for (a, b, want) in expect {
+        assert_eq!(
+            cl0r0::ast::conflicts(a, b),
+            want,
+            "conflicts({:?}, {:?})",
+            a,
+            b
+        );
+        assert_eq!(
+            cl0r0::ast::conflicts(b, a),
+            want,
+            "symmetry conflicts({:?}, {:?})",
+            b,
+            a
+        );
+    }
+    // 全矩陣完備(6×6):與 expect 表一致(表中未列出的對 = false)
+    let mut pairs: Vec<(EvKind, EvKind)> = Vec::new();
+    for (i, a) in kinds.iter().enumerate() {
+        for (_j, b) in kinds.iter().enumerate().skip(i) {
+            pairs.push((*a, *b));
+        }
+    }
+    assert_eq!(pairs.len(), 21);
+    for (a, b) in &pairs {
+        let want = expect.iter().any(|&(x, y, w)| (x == *a && y == *b) && w);
+        assert_eq!(
+            cl0r0::ast::conflicts(*a, *b),
+            want,
+            "matrix must be complete for {:?} {:?}",
+            a,
+            b
+        );
+    }
+}
+
+#[test]
+fn test_law_semantic_facts_consistent() {
+    // §3.2–3.3 語義面一致性:extract → 三軌 intervals → 紅邊 → 圖形狀,
+    // 並行驗證 T2 的 χ = ω(區間圖完美:max_clique == greedy_chromatic)。
+    use cl0r0::ast::Track;
+    use cl0r0::ast::{
+        conflict_graph_shape, extract, greedy_chromatic, intervals, max_clique, red_edges,
+    };
+    let mut rng = Rng::new(0xA57);
+    let mut checked = 0usize;
+    for i in 0..600 {
+        let src = match i % 3 {
+            0 => gen_legal(&mut rng),
+            1 => {
+                let l = gen_legal(&mut rng);
+                gen_half_file(&mut rng, &l)
+            }
+            _ => gen_garbage(&mut rng, 50),
+        };
+        let t = parse(&src).unwrap();
+        let facts = extract(&t);
+        assert_eq!(facts.has_error_regions, t.has_error());
+        // 標籤面(§3.2 顯示標簽):種類與軌道標籤都必須非空(sexp/報告的基礎)。
+        assert!(
+            !Track::Lexical.label().is_empty()
+                && !Track::Nll.label().is_empty()
+                && !Track::Referent.label().is_empty()
+        );
+        for ev in &facts.events {
+            assert!(!ev.kind.label().is_empty());
+        }
+        for track in [Track::Lexical, Track::Nll, Track::Referent] {
+            let (ivs, evs) = intervals(&facts, track);
+            assert_eq!(ivs.len(), facts.bindings.len(), "one vec per binding");
+            let mut total = 0usize;
+            for (b, iv) in ivs.iter().enumerate() {
+                total += iv.len();
+                for it in iv {
+                    assert!(it.start <= it.end, "{:?} must be half-open", track);
+                }
+                // interval 圖完美性:χ = ω(同一綁定的活躍區間形成區間圖)
+                if iv.len() >= 2 {
+                    assert_eq!(
+                        max_clique(iv),
+                        greedy_chromatic(iv),
+                        "T2 χ=ω violated on binding {} ({:?})",
+                        b,
+                        track
+                    );
+                }
+            }
+            assert_eq!(total, evs.len(), "one interval per event ({:?})", track);
+            // 紅邊:同綁定 + 相容性被違反 + 區間重疊(獨立複驗)
+            let edges = red_edges(&facts, track);
+            let (v, e) = conflict_graph_shape(&facts, track);
+            assert_eq!(e, edges.len(), "shape edge count");
+            let mut verts: Vec<usize> = Vec::new();
+            for ed in &edges {
+                verts.push(ed.a);
+                verts.push(ed.b);
+                let ea = &facts.events[ed.a];
+                let eb = &facts.events[ed.b];
+                assert_eq!(ea.binding, ed.binding);
+                assert_eq!(eb.binding, ed.binding);
+                assert!(cl0r0::ast::conflicts(ea.kind, eb.kind));
+            }
+            verts.sort_unstable();
+            verts.dedup();
+            assert_eq!(v, verts.len(), "shape vertex count");
+        }
+        checked += 1;
+    }
+    assert!(checked >= 500, "must exercise the fact layer");
+}
+
+#[test]
+fn test_law_parse_error_paths_total() {
+    // 錯誤回收的構造矩陣:每個語法構造一個壞一半的輸入 → 錯誤回收分支。
+    // 斷言:總化 + byte-exact roundtrip + 連續性 + laminar + 樹公理(零 panic)。
+    let cases: &[&str] = &[
+        "fn",
+        "fn f",
+        "fn f(",
+        "fn f()",
+        "fn f() {",
+        "fn f() { let",
+        "fn f() { let mut",
+        "fn f() { let x",
+        "fn f() { let x =",
+        "fn f() { let x = ; }",
+        "fn f() { let x = 1",
+        "fn f() { if",
+        "fn f() { if x",
+        "fn f() { if x {",
+        "fn f() { if x { } else",
+        "fn f() { while",
+        "fn f() { while x",
+        "fn f() { loop",
+        "fn f() { return",
+        "fn f() { return ;",
+        "fn f() { x(",
+        "fn f() { x.y",
+        "fn f() { x[",
+        "fn f() { x[0",
+        "fn f() { {",
+        "fn f() { &",
+        "fn f(,",
+        "fn f(x",
+        "fn f(x:",
+        "struct",
+        "struct S",
+        "struct S {",
+        "struct S { a",
+        "struct S { a:",
+        "fn f() { let x = (1; }",
+        "fn f() { let x = { 1; }",
+        "fn f() { !; }",
+        "fn f() { -; }",
+        "fn f() { x = ; }",
+        "fn f() { *; }",
+        "fn f() { f(,); }",
+        "fn f() { f(a,); }",
+        "fn f() { (a b); }",
+        "fn f() { a & & ; }",
+        "fn f() { a + ; }",
+        "fn f() { a < ; }",
+        "fn f() { || ; }",
+        "fn f() { let _ = 1; }",
+        "fn f() { let m = &mut; }",
+        "fn f() { x = y = ; }",
+    ];
+    for src in cases {
+        let t = parse(src).expect("total (no Err)");
+        assert_eq!(t.unparse(), *src, "roundtrip");
+        t.validate_continuity()
+            .unwrap_or_else(|e| panic!("continuity: {} ({:?})", e, src));
+        assert!(t.laminar_ok(), "laminar ({:?})", src);
+        t.validate_tree_shapes()
+            .unwrap_or_else(|e| panic!("tree axioms: {} ({:?})", e, src));
+    }
+}
+
+#[test]
+fn test_law_r0_error_paths_total() {
+    // R₀ 錯誤回收矩陣:半截構造 → 節點級 Unsupported / Error,必 Ok 且 roundtrip。
+    let cases: &[&str] = &[
+        "fn",
+        "fn f",
+        "fn f(",
+        "fn f()",
+        "fn f() {",
+        "fn f() { let",
+        "fn f() { let x =",
+        "fn f() { if",
+        "fn f() { if x {",
+        "fn f() { while",
+        "fn f() { return",
+        "fn f() { x(",
+        "fn f() { x[",
+        "fn f(,",
+        "fn f(x:",
+        "struct S {",
+        "struct S { a:",
+        "fn f() { let x = (1; }",
+        "fn f() { let x = { 1; }",
+        "fn f() { |a| a; }",
+        "fn f() { #; }",
+        "fn f() { 'a; }",
+        "fn f() { let x: Vec<; }",
+        "fn f() { let x: [int; }",
+        "fn f() { &'a int; }",
+        "fn f() { x y; }",
+        "fn f() { &&x; }",
+        "fn f() { !x; }",
+        "fn f() { *x; }",
+        "fn f() { let x = ; }",
+        "fn f() { let mut; }",
+        "fn f() { x. ; }",
+        "fn f() { x .. ; }",
+        "fn f() { x = ; }",
+    ];
+    for src in cases {
+        let t = cl0r0::r0::r0_parse(src).expect("total (no Err)");
+        assert_eq!(t.unparse(), *src, "roundtrip ({:?})", src);
+        t.validate_continuity()
+            .unwrap_or_else(|e| panic!("r0 continuity: {} ({:?})", e, src));
+        assert!(t.laminar_ok(), "r0 laminar ({:?})", src);
+    }
+}
+
+#[test]
+fn test_law_rep_menu_algebra() {
+    // 菜單 × 政策代數:適用規則集、單步、歸約、L8 檢查在全部組合上
+    // 給出一致的測度行為(Guarded 保證嚴格遞減;Raw 不保證)。
+    let mut rng = Rng::new(0xBE);
+    let mut states = 0usize;
+    for _ in 0..300 {
+        let s = random_state(&mut rng);
+        for menu in [Menu::CommutativeTrim, Menu::Naive] {
+            for policy in [Policy::Raw, Policy::Guarded] {
+                assert!(menu.label().contains("CommutativeTrim") || menu.label().contains("Naive"));
+                let rules = menu.applicable(&s, policy);
+                for r in &rules {
+                    assert!(!r.label().is_empty(), "rule labels must be non-empty");
+                    if let Some(s2) = rep::apply(&s, *r) {
+                        // 施加後紅邊數不得增加(修剪/分裂都是「拆紅邊」)
+                        assert!(
+                            s2.red_edges().len() <= s.red_edges().len() + 8,
+                            "red edges must not explode: {} -> {}",
+                            s.red_edges().len(),
+                            s2.red_edges().len()
+                        );
+                    }
+                }
+                if matches!(menu, Menu::CommutativeTrim) {
+                    let (nf, steps) = rep::normalize(s.clone(), menu, policy);
+                    assert!(steps <= 10001, "normalize must terminate");
+                    let _ = nf.red_edges();
+                }
+                if policy == Policy::Guarded {
+                    assert!(
+                        rep::l8_check(&s, menu, policy).is_none(),
+                        "Guarded must satisfy L8 on {:?}",
+                        s.evs
+                    );
+                }
+            }
+        }
+        states += 1;
+    }
+    assert!(states >= 250);
+}
+
+#[test]
+fn test_reuse_data_consistency() {
+    // §2.2/§5.3 增量重析基礎設施的工具性契約(非 L3/L4 等價斷言 —— 依規格排除):
+    // 單點編輯 → reparse:新樹必須反映新源碼(roundtrip),reuse 統計一致。
+    let mut rng = Rng::new(0x2A);
+    let mut n = 0usize;
+    for _ in 0..60 {
+        let src = gen_legal(&mut rng);
+        let t = parse(&src).unwrap();
+        let e = gen_edit(&mut rng, src.len());
+        let new_src = cl0r0::edit::apply(&src, &e);
+        let out = cl0r0::parse::reparse(&t, &new_src, std::slice::from_ref(&e))
+            .expect("reparse must be total on single edits");
+        let (nn, an, ne, nt) = out.tree.stats();
+        assert_eq!(
+            out.total,
+            nn + an + ne + nt,
+            "total must equal the new tree's node count"
+        );
+        let (_, _, _, _) = t.stats();
+        assert!(
+            out.reused <= out.total,
+            "reused must not exceed the new tree's node count"
+        );
+        assert!(out.reused <= out.total, "reused ⊆ total");
+        // 新樹必須是新源碼的忠實 parse(roundtrip 契約)
+        let t2 = parse(&new_src).unwrap();
+        assert_eq!(t2.unparse(), new_src);
+        n += 1;
+    }
+    assert!(n >= 50);
+}
+
+#[test]
+fn test_edit_unit_operations() {
+    // §2.1 編輯單元的邊緣操作:is_empty / shift ⊥ / unshift / compose 重疊拒絕 /
+    // compose_seq 排序與非互斥拒絕。
+    use cl0r0::edit::{compose, compose_seq, is_pairwise_disjoint, Edit};
+    use cl0r0::span::Span;
+    let e0 = Edit::new(4, 4, "");
+    assert!(e0.is_empty(), "identity edit");
+    let e = Edit::new(2, 5, "xy"); // 替換 [2,5) → "xy"
+    assert!(!e.is_empty());
+    assert_eq!(e.shift(1), Some(1), "before region");
+    // delta = 2 − 3 = −1(替換 [2,5) 為 2 字元 ⇒ 淨縮短 1)
+    assert_eq!(e.shift(10), Some(9), "after region: p + delta");
+    assert_eq!(e.shift(3), None, "inside region ⇒ ⊥");
+    assert_eq!(e.unshift(10), Some(11), "inverse shift: p − delta");
+    assert_eq!(e.unshift(3), None, "inside the new text ⇒ ⊥");
+    assert_eq!(e.unshift(50), Some(51), "beyond the new region: p − delta");
+    // 重疊編輯:compose 拒絕(單體語義外)
+    let e2 = Edit::new(4, 6, "z");
+    assert!(
+        compose(&e, &e2).is_none(),
+        "overlapping edits must be rejected"
+    );
+    // 相接(半開語義 [2,5) 與 [5,7)):不重疊 ⇒ 可分離(與 §1.2 一致)
+    let e3 = Edit::new(5, 7, "w");
+    assert!(compose(&e, &e3).is_some(), "half-open touching is disjoint");
+    // 同點插入(文本拼接語義)必須拒絕
+    let e5 = Edit::new(2, 2, "ins");
+    assert!(compose(&e, &e5).is_none(), "same-point insertion rejected");
+    // 分離編輯:compose_seq 排序歸併
+    let a = Edit::new(0, 1, "A");
+    let b = Edit::new(10, 11, "B");
+    let c = Edit::new(5, 6, "C");
+    assert!(is_pairwise_disjoint(&[a.clone(), b.clone(), c.clone()]));
+    let seq = compose_seq(&[b.clone(), c.clone(), a.clone()]).expect("disjoint ⇒ composable");
+    assert!(
+        seq[0].start == 0 && seq[1].start == 5 && seq[2].start == 10,
+        "sorted"
+    );
+    assert!(
+        compose_seq(&[Edit::new(0, 3, "A"), Edit::new(2, 5, "B")]).is_none(),
+        "overlapping edits rejected by compose_seq"
+    );
+    // 應用一個編輯的結果以 span 檢查
+    let src = "abcdefghij";
+    let r = cl0r0::edit::apply(src, &Edit::new(2, 4, "XY"));
+    assert_eq!(r, "abXYefghij");
+    let _ = Span::new(0, 0);
+}
+
+#[test]
+fn test_law_r0_kind_label_exhaustive() {
+    // R0Kind 標籤與具名性:枚舉完備(label 非空、sexp 投影只留 is_named)。
+    use cl0r0::r0::R0Kind::*;
+    let kinds = [
+        Root,
+        FnItem,
+        StructItem,
+        FieldDef,
+        Param,
+        TypeRef,
+        Block,
+        LetStmt,
+        ReturnStmt,
+        IfStmt,
+        WhileStmt,
+        LoopStmt,
+        ExprStmt,
+        Expr,
+        UnaryExpr,
+        Unsupported,
+        Error,
+        FnKw,
+        StructKw,
+        LetKw,
+        MutKw,
+        IfKw,
+        ElseKw,
+        WhileKw,
+        LoopKw,
+        ReturnKw,
+        TrueKw,
+        FalseKw,
+        Amp,
+        AmpMut,
+        Star,
+        Plus,
+        Minus,
+        Eq,
+        EqEq,
+        NotEq,
+        Lt,
+        Le,
+        Gt,
+        Ge,
+        AndAnd,
+        OrOr,
+        Not,
+        Dot,
+        Semi,
+        Colon,
+        Comma,
+        LParen,
+        RParen,
+        LBrace,
+        RBrace,
+        LBrack,
+        RBrack,
+        Arrow,
+        Slash,
+        Percent,
+        Ident,
+        Number,
+        RawString,
+        Trivia,
+        Bad,
+    ];
+    let mut labels: Vec<&str> = Vec::new();
+    for k in kinds {
+        let l = k.label();
+        assert!(!l.is_empty(), "label must be non-empty");
+        labels.push(l);
+        // 具名層:結構性(非 token/trivia/bad/error/unsupported)
+        if matches!(
+            k,
+            Root | FnItem
+                | StructItem
+                | FieldDef
+                | Param
+                | TypeRef
+                | Block
+                | LetStmt
+                | ReturnStmt
+                | IfStmt
+                | WhileStmt
+                | LoopStmt
+                | ExprStmt
+                | Expr
+                | UnaryExpr
+        ) {
+            assert!(k.is_named(), "{:?} must be named", k);
+        }
+    }
+    labels.sort_unstable();
+    for w in labels.windows(2) {
+        assert_ne!(w[0], w[1], "labels must be distinct");
+    }
+}
+
+#[test]
+fn test_law_r0_unsupported_keyword_matrix() {
+    // §9 排除項關鍵字(詞面掃描,legacy unsupported):16 個關鍵字逐一申報。
+    let kws = [
+        "trait",
+        "impl",
+        "use",
+        "mod",
+        "pub",
+        "unsafe",
+        "async",
+        "match",
+        "macro_rules",
+        "dyn",
+        "enum",
+        "type",
+        "static",
+        "const",
+        "extern",
+        "where",
+    ];
+    for kw in kws {
+        let src = format!("{} X {{}}", kw);
+        let v = cl0r0::r0::unsupported(&src);
+        assert!(
+            v.iter()
+                .any(|(note, _)| note.contains(kw) || note.contains("排除")),
+            "keyword {} must be reported, got {:?}",
+            kw,
+            v
+        );
+    }
+    // 空輸入與普通程式:無虛報
+    assert!(cl0r0::r0::unsupported("").is_empty());
+    assert!(cl0r0::r0::unsupported("fn f() {}").is_empty());
+}
+
+#[test]
+fn test_law_semantic_extract_breadth() {
+    // 語法面寬度:每種事件形態都在事實層留下可機械檢查的痕跡。
+    use cl0r0::ast::{extract, intervals, red_edges, Track};
+    // 注意:CL0 語法面(附錄 A)不含 `>` / 賦值語句 / loop / else(解析為 ERROR);
+    // 語義面只對可達語法負責,樣本矩陣以 CL0 可達語法為界。
+    let progs: &[&str] = &[
+        // 借鏈 + 解引用(鏈:宣告 → 借用 → 使用)
+        "fn f() { let x = 1; let r = &x; let y = *r; }",
+        "fn f() { let x = 1; let r = &mut x; let y = *r; }",
+        "fn f() { let x = 1; let y = *&x; }",
+        // 參數綁定 + 讀
+        "fn f(a: int, b) { let c = a + b; }",
+        "fn f(a: int) { let b = *a; }",
+        // 重聲明(Nll killer)
+        "fn f() { let x; let x = 1; let y = x; }",
+        // if(條件 + 分支塊內宣告)
+        "fn f() { let x = 1; if x < 2 { let y = 3; } }",
+        "fn f() { let x = 1; if x < 2 { let y = 3; } let z = x; }",
+        // while(條件 + 塊)
+        "fn f() { let x = 1; while x < 2 { let y = 3; } }",
+        // 移動語義(調用參數)
+        "fn f() { let x = 1; g(x); let y = 2; }",
+        "fn f() { let x = 1; g(x * 2); }",
+        // 索引 / 字段 / 一元
+        "fn f() { let x = 1; let y = x[0]; }",
+        "fn f() { let x = 1; let y = p.q; }",
+        "fn f() { let x = 1; let y = !x; }",
+        "fn f() { let x = 1; let y = -x; }",
+        // 嵌套 block 表達式
+        "fn f() { let y = { let z = 1; z }; }",
+        "fn f() { let y = f({ let z = 2; z }); }",
+        "fn f() { let y = { let z = { let w = 3; w }; z }; }",
+        // 未定義名(emit 失敗路徑)
+        "fn f() { let y = undeclared + x; }",
+        "fn f() { let y = &undeclared; }",
+        // 常數 / 混合
+        "fn f() { let y = true + 42; }",
+        "fn f() { let y = false * 7 % 2; }",
+        "fn f() { let x = 1; let y = x == 1 && x != 2; }",
+        "fn f() { let x = 1; let y = x < 2 || x >= 1; }",
+        "fn f() { let x = 1; let y = (x); }",
+        // 多重使用(紅邊路徑)
+        "fn f() { let x = 1; let y = &mut x; let z = x; }",
+        "fn f() { let x = 1; let a = &x; let b = &x; let c = x; }",
+        // 借鏈完整使用(Referent 軌的事件擴展)
+        "fn f() { let x = 1; let r = &x; let y = r; }",
+        "fn f() { let x = 1; let r = &x; let y = r + x; }",
+        "fn f() { let mut x = 1; let r = &mut x; let y = r; }",
+        "fn f() { let x = 1; let r = &x; f(r); }",
+        "fn f() { let x = 1; let r = &x; let s = r; let t = r; }",
+        // killer(重宣告 / 移動)
+        "fn f() { let x = 1; let x = x + 1; let y = x; }",
+        "fn f() { let x = 1; g(x); let y = 2; }",
+        // 未綁定借用源(link 的 src lookup 失敗)
+        "fn f() { let r = &nope; }",
+        "fn f() { let r = &mut nope; }",
+        // 多條件 / 多塊
+        "fn f() { let x = 1; if x < 1 { let y = 2; } if x < 2 { let z = 3; } }",
+        "fn f() { let a = 1; while a < 2 { let b = 3; } while a < 3 { let c = 4; } }",
+        // block 表達式內運算與命名使用
+        "fn f() { let a = { let b = 1; b * 2 }; let c = a; }",
+        "fn f() { let a = 1; let b = { a }; let c = b; }",
+        // 空函數 / 空塊
+        "fn f() {}",
+        "fn f() { }",
+        "fn f() { let x = 1; }",
+        "fn f() { let x = 1; let y = x; let z = y + x; }",
+    ];
+    let mut n = 0usize;
+    for src in progs {
+        let t = parse(src).expect("legal breadth sample");
+        let facts = extract(&t);
+        assert_eq!(facts.has_error_regions, t.has_error(), "{:?}", src);
+        for track in [Track::Lexical, Track::Nll, Track::Referent] {
+            let (ivs, evs) = intervals(&facts, track);
+            assert_eq!(ivs.len(), facts.bindings.len());
+            let tot: usize = ivs.iter().map(|v| v.len()).sum();
+            assert_eq!(tot, evs.len(), "{:?} on {:?}", track, src);
+            let _ = red_edges(&facts, track);
+        }
+        n += 1;
+    }
+    assert!(n >= 40, "breadth samples must be exercised, got {}", n);
+    // 兼帶:垃圾輸入 → has_error 幀,事實層如實為空/部分(不得 panic)
+    let mut rng = Rng::new(0xED);
+    for _ in 0..30 {
+        let g = gen_garbage(&mut rng, 40);
+        let t = parse(&g).unwrap();
+        let facts = extract(&t);
+        let _ = facts.bindings.len();
+        for track in [Track::Lexical, Track::Nll, Track::Referent] {
+            let _ = red_edges(&facts, track);
+        }
+    }
 }

@@ -2,13 +2,13 @@
 
 > **紀律:律先於碼 —— 每律一個具名測試;律不過,碼不合。**
 > 本表即該紀律的字面落實(P1 #8):規格條文 → 具名測試 → 代碼符號,一表窮盡。
-> 基線:`v0.1.1` 增量(第一迭代)· 全管線綠(fmt / clippy -D warnings / test / doc -D warnings)。
+> 基線:第二迭代(第一迭代 + P0 #3/#4 + P1 #6/#7)· 全管線綠(fmt / clippy -D warnings / test / doc -D warnings / cov gate / bench gate)。
 
 ---
 
-## 〇、測試全量清單(27 具名測試)
+## 〇、測試全量清單(46 具名測試)
 
-**CL0 載體 — 九律 + 編輯單體 + 定理(16,`tests/laws.rs`)**
+**CL0 載體 — 九律 + 編輯單體 + 定理 + 語義面(31,`tests/laws.rs`)**
 
 | 具名測試 | 對應律 |
 |---|---|
@@ -21,15 +21,28 @@
 | `test_law_L7a_no_false_errors` | L7a 無假錯誤 |
 | `test_law_L7b_structural_maximality` | L7b 結構極大化(迭代淨化)|
 | `test_law_L7_error_totalization` | **L7 全化(第一迭代重建)**|
+| `test_shrink_finds_minimal_error_trigger` | **反例縮小 — 最小錯誤現場(第二迭代)**|
+| `test_law_regression_fixtures` | **fixtures 回歸防線(第二迭代)**|
 | `test_law_L8_red_edge_decreasing` | L8a 紅邊嚴格遞減 |
 | `test_law_L8_measure_is_guaranteeing_termination` | L8b μ 保證終止 |
 | `test_law_L9_unique_normal_form` | L9a 唯一正規形 |
 | `test_law_L9_critical_pairs_joinable` | L9b 臨界對可合流 |
 | `test_law_L9_naive_menu_finds_counterexample` | L9c 機器找反例(通道)|
+| `test_law_L9_scaled_space_joinable` | **L9 規模擴張 4×5 + 並行(第二迭代)**|
+| `test_law_L9_scaled_space_counterexample_found` | **並行版「機器找反例」仍在(第二迭代)**|
 | `test_theorem_T2_interval_graphs_are_perfect` | T2 區間圖完美性 |
 | `test_edit_monoid_laws` | M1/M2/M4/M5 編輯單體 |
+| `test_edit_unit_operations` | **§2.1 編輯邊緣操作(第二迭代)**|
+| `test_law_span_geometry` | **§1.2 半開區間代數(第二迭代)**|
+| `test_law_parse_error_paths_total` | **解析錯誤回收矩陣(第二迭代)**|
+| `test_law_r0_error_paths_total` | **R₀ 錯誤回收矩陣(第二迭代)**|
+| `test_law_rep_menu_algebra` | **菜單 × 政策代數(第二迭代)**|
+| `test_reuse_data_consistency` | **§2.2/§5.3 增量工具契約(第二迭代)**|
+| `test_law_semantic_conflict_matrix` | **§3.3 相容性矩陣(第二迭代)**|
+| `test_law_semantic_facts_consistent` | **§3.2–3.3 語義面一致性(第二迭代)**|
+| `test_law_semantic_extract_breadth` | **語義面語法矩陣(第二迭代)**|
 
-**R₀ 載體 — 附錄 B 解析器(8,`src/r0.rs` mod tests)**
+**R₀ 載體 — 附錄 B 解析器 + R₀ 語義斷言(10)**
 
 | 具名測試 | 對應規格 |
 |---|---|
@@ -41,10 +54,14 @@
 | `r0_parse_unsupported_nodes` | §9 節點級 Unsupported(第一迭代)|
 | `r0_parse_depth_honest` | §9 機器界如實申報(Depth,永不 panic)|
 | `r0_parse_determinism_named_sexp` | L2/L6 決定論 + 具名投影(對 R₀)|
+| `test_law_r0_kind_label_exhaustive` | **R0Kind 標籤完備(第二迭代)**|
+| `test_law_r0_unsupported_keyword_matrix` | **§9 排除關鍵字矩陣(第二迭代)**|
 
-**核心冒煙(3,** `src/lex.rs` `src/parse.rs` mod tests **)**
+**核心冒煙 + 反例縮小(7,** `src/lex.rs` `src/parse.rs` `src/shrink.rs` mod tests **)**
 
-`lex_lexical_invariants` · `smoke_parse_legal` · `smoke_parse_garbage`
+`lex_lexical_invariants` · `smoke_parse_legal` · `smoke_parse_garbage` ·
+`shrink_finds_exact_minimal` · `shrink_handles_unicode_boundaries` ·
+`shrink_monotone_l7_style` · `shrink_empty_and_trivial`
 
 ---
 
@@ -56,7 +73,7 @@
 | §1.2 | 位址映象 σ(v) = [a,b) 半開 | `test_edit_monoid_laws`(位移函數) | `span::Span::new` | ✅ |
 | §1.3 | 具名投影 π(保留具名、丟匿名/trivia) | `test_law_L6_projection_is_function_of_surface` | `Tree::named_sexp` | ✅ |
 | §2.1 | 編輯單體:位移函數、複合、結合律 | `test_edit_monoid_laws` | `edit::{apply, compose, compose_seq}` | ✅ |
-| §2.2 | 增量重析(reuse 準則:σ 不相交 ∧ 邊界配置同) | (規格排除 L3/L4;基礎設施在,未激活) | `parse::Tree`(配置快照欄位) | ⬜ 依規格留白 |
+| §2.2 | 增量重析(reuse 準則:σ 不相交 ∧ 邊界配置同) | `test_reuse_data_consistency`(工具契約;L3/L4 等價仍依規格排除) | `parse::reparse` / `ReuseData` | ⚠️ 工具綠/等價留白 |
 | §2.3 | ERROR 全化:任意輸入必回樹 | **`test_law_L7_error_totalization`** | `parse::parse` / `Tree::validate_continuity` | ✅ |
 | §2.3 | L7a 無假錯誤(合法程式 0 ERROR) | `test_law_L7a_no_false_errors` | `parse::parse` / `Tree::has_error` | ✅ |
 | §2.3 | L7b 極大錯誤跨度互不嵌套 + 迭代淨化 | `test_law_L7b_structural_maximality` | `Tree::maximal_error_spans` | ✅ |
@@ -72,7 +89,7 @@
 | §4.3 | L9 反例通道(機器找反例)| `test_law_L9_naive_menu_finds_counterexample` | `rep::enumerate_states` | ✅ |
 | §4.4 | 錨定保持:事實攜帶可回跳 span | `test_law_L6_*`(錨位址並檢)| `ast`(事實層 span)| ✅ |
 | §5.1 | 詞法 DFA、平鋪、trivia 保留 | `test_law_L1_lexical_tiling` / `lex_lexical_invariants` | `lex::lex` | ✅ |
-| §5.3 | 配置快照(增量重析界)| (與 §2.2 同留白)| `parse::Tree`(cfgs 欄位)| ⬜ 依規格留白 |
+| §5.3 | 配置快照(增量重析界)| `test_reuse_data_consistency` | `parse::Tree`(cfgs 欄位)| ⚠️ 工具綠 |
 | §6.3 | 判定權不轉移(rustc 面記 0)| `test_law_L8_measure_is_guaranteeing_termination` | `rep`(μ 定義)| ✅ |
 | 附錄 A | L1–L9 全矩陣 | 上表 16 條 | — | ✅ |
 | 附錄 B | R₀ EBNF(見下節) | 下節 8 條 | `r0` | ✅ |
@@ -104,9 +121,10 @@
 
 | # | 缺口 | 狀態 |
 |---|---|---|
-| 1 | L7 全化無獨立具名測試(曾被子測試合併吸收)| **第一迭代已補**:`test_law_L7_error_totalization`(四源:合法/雙重垃圾/半截/隨機位元),並藉此**發現並修復** CL0 解析器真實缺陷——錯誤回收彈棧未 `finalize`,哨兵跨度 (u32::MAX, 0) 泄漏進 `unparse` 至越界 |
-| 2 | R₀ `unsupported` 僅詞法/詞級 | **第一迭代已補**:節點級 Unsupported(note + 精確 span),排除項:trait/impl/use/mod/pub/unsafe/async/match/macro_rules/dyn/enum/type/static/const/extern/where + 閉包/生命週期/屬性/泛型歧義/非法符號 |
-| 3 | L9「反例通道」是**機器找反例**,非**證明無反例** | 仍留白(如實) —— 提升通道規模在第二迭代 P0 #4(4 事件 × 6 座標 + 並行)|
+| 1 | L7 全化無獨立具名測試(曾被子測試合併吸收)| **已補**(迭代 1 + 2):`test_law_L7_error_totalization` + `test_law_regression_fixtures` + `test_law_semantic_extract_breadth`(語義面不 panic);修復:哨兵跨度泄漏、`ast::extract` Root 外殼未穿透、半截 4 處 `unwrap` |
+| 2 | R₀ `unsupported` 僅詞法/詞級 | **已補**:節點級 Unsupported + `test_law_r0_unsupported_keyword_matrix`(16 關鍵字逐一申報) |
+| 3 | L9「反例通道」是**機器找反例**,非**證明無反例** | 已強化(非消除):並行 + 4 事件 × 6 座標(623,616 狀態 × 635,424 臨界對,0 違反);「證明無反例」仍是 P3 #12(形式化)範圍 |
+| 4 | 覆蓋率:核心已 ≥90%;`ast.rs` 76.9% 依豁免 | **明示豁免**(行映射失真 + R₀ 保留槽;見 docs/COVERAGE.md)—— 硬門檻 75%,不假裝覆蓋 |
 
 **排除項(依規格,非缺口)**:L3(增量重析等價)/ L4(編輯單體相容)——基礎設施
 (`reparse` / `compose`)就緒,如需激活只需補等價測試;§9 非目標(不重造 rustc)。
@@ -116,6 +134,8 @@
 ## 四、防線(CI,`.github/workflows/ci.yml`)
 
 `push main / PR` → `cargo fmt --all --check` → `cargo clippy --all-targets -- -D warnings`
-→ `cargo test --all`(上表 27 具名測試即驗收合同)→ `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`。
+→ `cargo test --all`(上表 46 具名測試即驗收合同)→ `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
+→ **coverage gate**(核心 ≥90%,ast ≥75% 豁免,`tools/cov_gate.py`)
+→ **bench gate**(`hotpaths` ±25%,`tools/bench_gate.py`)。
 
 任何一條紅線 = PR 不可合併。規格讓步必須走「改規格 + 對帳表更新」而非「放水測試」。

@@ -21,6 +21,10 @@ path = "src/bin/l9newman.rs"
 name = "fuzz"
 path = "src/bin/fuzz.rs"
 
+[[bench]]
+name = "hotpaths"
+harness = false
+
 [profile.release]
 debug = true
 # PGO + LTO 優化(LTO 固化在 profile;PGO 由 RUSTFLAGS 驅動兩輪構建)

@@ -14,9 +14,25 @@ fn main() {
         (Menu::Naive, Policy::Raw),
         (Menu::Naive, Policy::Guarded),
     ] {
-        let rep = newman_check(menu, policy, 3, 5, 8);
+        let t0 = std::time::Instant::now();
+        // P0 #4:空間由 3 事件 × 5 座標 → 4 事件 × 6 座標(並行分塊)。
+        // 對 CT/Guarded 這是全域驗證(623,616 狀態 × 635,424 臨界對);
+        // 對 Naive(壞菜單)檢查複雜度高 ~100×,取其存在性反例即可
+        // (機器找反例:3 事件 × 3 座標即命中) —— 下方如實打印所用規模。
+        let (n_ev, coord, depth) = if matches!(menu, Menu::CommutativeTrim) {
+            (4, 6, 8)
+        } else {
+            // 壞菜單:反例在淺層即命中(depth 3),深走只會指數膨脹。
+            (3, 3, 3)
+        };
+        let rep = newman_check(menu, policy, n_ev, coord, depth);
+        let dt = t0.elapsed();
         println!("\n--- 菜單:{} / 政策:{:?} ---", menu.label(), policy);
-        println!("  窮舉狀態數:{}", rep.states);
+        println!(
+            "  窮舉狀態數:{}(空間 {} 事件 × {} 座標 × depth {};並行線程 {})",
+            rep.states, n_ev, coord, depth, rep.threads
+        );
+        println!("  檢查耗時:{:.1}s", dt.as_secs_f64());
         println!("  臨界對檢查數:{}", rep.critical_pairs);
         println!("  L8 遞減違反數:{}", rep.l8_violations.len());
         for (s, s2, r) in rep.l8_violations.iter().take(3) {
@@ -36,6 +52,9 @@ fn main() {
             println!("      分支 b:{}", fmt_state(b));
         }
         println!("  唯一正規形狀態數:{}", rep.unique_nf_states);
+        if rep.truncated {
+            println!("  [注]反例列表為報告目的截斷(每類上限 64);計數為全量。");
+        }
         println!("  多正規形狀態數:{}", rep.multi_nf.len());
         for (s, nfs) in rep.multi_nf.iter().take(2) {
             println!("    反例:源 {} 有 {} 個正規形", fmt_state(s), nfs.len());

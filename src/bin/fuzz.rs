@@ -9,7 +9,9 @@ use cl0r0::ast;
 use cl0r0::gen::{gen_edit, gen_garbage, gen_half_file, gen_legal, Rng};
 use cl0r0::parse::{parse, reparse};
 use cl0r0::rep::{self, AState, Ev, Menu, Policy, K};
+use cl0r0::shrink::shrink_to_minimal;
 use cl0r0::span::Span;
+use cl0r0::tree::l7b_evaluate;
 
 fn main() {
     let mut rng = Rng::new(0xC10_2024_0001);
@@ -31,6 +33,50 @@ fn main() {
             eprintln!("LAW FAIL [{}] {}: {}", law, extra, detail);
         }
     };
+
+    // ---------- 反例最小化(P0 #3)----------
+    // 失敗保持謂詞:prop(s) = true ⇔ s 仍使該檢查失敗。
+    let prop_roundtrip = |s: &str| parse(s).map(|t| t.unparse() != s).unwrap_or(true);
+    let prop_continuity = |s: &str| {
+        parse(s)
+            .map(|t| !t.validate_continuity().is_ok())
+            .unwrap_or(true)
+    };
+    let prop_treeaxiom = |s: &str| {
+        parse(s)
+            .map(|t| !t.validate_tree_shapes().is_ok())
+            .unwrap_or(true)
+    };
+    let prop_laminar = |s: &str| parse(s).map(|t| !t.laminar_ok()).unwrap_or(true);
+    let prop_legal_error = |s: &str| parse(s).map(|t| t.has_error()).unwrap_or(true);
+    let prop_determinism = |s: &str| {
+        parse(s)
+            .map(|t| parse(s).map(|t2| t2.sexp() != t.sexp()).unwrap_or(true))
+            .unwrap_or(true)
+    };
+    let prop_projection = |s: &str| {
+        parse(s)
+            .map(|t| {
+                parse(s)
+                    .map(|t2| t2.named_sexp() != t.named_sexp())
+                    .unwrap_or(true)
+            })
+            .unwrap_or(true)
+    };
+    let prop_l7b = |s: &str| {
+        let (bad, rounds) = l7b_evaluate(s);
+        bad > 0 || rounds >= 8
+    };
+    /// 失敗 → ddmin 最小反例 → 打印;CL0R0_FIXTURES_DIR 設定時歸檔。
+    fn shrinkify(law: &str, kind: &str, src: &str, prop: &dyn Fn(&str) -> bool) {
+        let m = shrink_to_minimal(src, prop);
+        eprintln!("    ↳ 最小反例({} 字符): {:?}", m.chars().count(), m);
+        if let Ok(dir) = std::env::var("CL0R0_FIXTURES_DIR") {
+            let name = format!("{}_{}.txt", law, kind);
+            let _ = std::fs::write(format!("{}/{}", dir, name), &m);
+            eprintln!("    ↳ 已歸檔 {}/{}", dir, name);
+        }
+    }
 
     // ---------- L1/L2/L5/L6 + 連續性 + 樹公理:任意輸入(含髒) ----------
     let n1 = 4000usize;
@@ -63,15 +109,18 @@ fn main() {
                 false,
                 format_args!("{:?} != {:?}", un, src),
             );
+            shrinkify("L1", "roundtrip", &src, &prop_roundtrip);
         }
         // L2
         let t2 = parse(&src).unwrap();
         if t2.sexp() != t.sexp() {
             fail(&mut stats, "L2", "determinism", false, format_args!(""));
+            shrinkify("L2", "determinism", &src, &prop_determinism);
         }
         // L5
         if !t.laminar_ok() {
             fail(&mut stats, "L5", "laminar", false, format_args!("{}", src));
+            shrinkify("L5", "laminar", &src, &prop_laminar);
         }
         // 連續性 + 樹公理
         let c = t.validate_continuity().is_ok();
@@ -83,6 +132,7 @@ fn main() {
                 false,
                 format_args!("{}", t.validate_continuity().unwrap_err()),
             );
+            shrinkify("L1", "continuity", &src, &prop_continuity);
         }
         let sh = t.validate_tree_shapes().is_ok();
         if !sh {
@@ -93,6 +143,7 @@ fn main() {
                 false,
                 format_args!("{}", t.validate_tree_shapes().unwrap_err()),
             );
+            shrinkify("L1", "treeaxiom", &src, &prop_treeaxiom);
         }
         // L7a:合法生成 ⇒ 無 ERROR
         if i % 3 == 0 && t.has_error() {
@@ -103,6 +154,7 @@ fn main() {
                 false,
                 format_args!("legal src has errors: {}", src),
             );
+            shrinkify("L7a", "no-false-error", &src, &prop_legal_error);
         }
     }
     // 合法程式的密集樣本
@@ -118,6 +170,7 @@ fn main() {
                 false,
                 format_args!("{}", src),
             );
+            shrinkify("L7a", "no-false-error", &src, &prop_legal_error);
         }
         if t.unparse() != src {
             fail(
@@ -127,6 +180,7 @@ fn main() {
                 false,
                 format_args!("{}", src),
             );
+            shrinkify("L1", "legal-roundtrip", &src, &prop_roundtrip);
         }
         // L6:具名投影一致性(與重析無關的靜態面:投影由表面層決定)
         let named1 = t.named_sexp();
@@ -139,6 +193,7 @@ fn main() {
                 false,
                 format_args!(""),
             );
+            shrinkify("L6", "projection-consistency", &src, &prop_projection);
         }
     }
 
@@ -147,73 +202,18 @@ fn main() {
     for _ in 0..n_half {
         let legal = gen_legal(&mut rng);
         let half = gen_half_file(&mut rng, &legal);
-        // (a) 極大錯誤跨度互不嵌套。
-        let t = parse(&half).unwrap();
-        let spans = t.maximal_error_spans();
-        for a in 0..spans.len() {
-            for b in (a + 1)..spans.len() {
-                let strict = (spans[a].start < spans[b].start && spans[b].end < spans[a].end)
-                    || (spans[b].start < spans[a].start && spans[a].end < spans[b].end);
-                if strict {
-                    fail(
-                        &mut stats,
-                        "L7b",
-                        "non-nested",
-                        false,
-                        format_args!("{:?} vs {:?}", spans[a], spans[b]),
-                    );
-                }
-            }
-        }
-        // (b) 迭代淨化:反覆移除極大錯誤跨度,直到不動點;殘餘只允許
-        //     切縫 / EOF 處的空錯誤(缺失內容)。
-        let mut cur = half.clone();
-        let mut seams: Vec<u32> = Vec::new();
-        let mut rounds = 0;
-        while rounds < 8 {
-            let rec = parse(&cur).unwrap();
-            let spans = rec.maximal_error_spans();
-            if spans.is_empty() {
-                break;
-            }
-            let mut cut = String::new();
-            let mut last = 0u32;
-            for sp in &spans {
-                cut.push_str(&cur[last as usize..sp.start as usize]);
-                seams.push(sp.start);
-                seams.push(sp.end);
-                last = sp.end;
-            }
-            cut.push_str(&cur[last as usize..]);
-            if cut == cur {
-                break;
-            }
-            cur = cut;
-            rounds += 1;
-        }
-        let fin = parse(&cur).unwrap();
-        let mut bad = 0usize;
-        for n in &fin.nodes {
-            if n.kind != cl0r0::parse::Kind::Error {
-                continue;
-            }
-            if !n.span.is_empty()
-                || !(n.span.start as usize == cur.len() || seams.contains(&n.span.start))
-            {
-                bad += 1;
-            }
-        }
+        // (a)+(b) 結構極大化與迭代淨化(機械檢查在 `tree::l7b_evaluate`;
+        //     斷言語義與 tests/laws.rs 的 L7b 完全一致)。
+        let (bad, rounds) = l7b_evaluate(&half);
         if bad > 0 || rounds >= 8 {
             fail(
                 &mut stats,
                 "L7b",
                 "iterative-purify",
                 false,
-                format_args!(
-                    "half={:?} cur={:?} bad={} rounds={}",
-                    half, cur, bad, rounds
-                ),
+                format_args!("half={:?} bad={} rounds={}", half, bad, rounds),
             );
+            shrinkify("L7b", "iterative-purify", &half, &prop_l7b);
         }
     }
 
@@ -232,6 +232,7 @@ fn main() {
                 false,
                 format_args!("{:?}", s),
             );
+            shrinkify("L1", "exhaustive", s, &prop_roundtrip);
         }
         if !t.laminar_ok() {
             fail(
@@ -241,6 +242,7 @@ fn main() {
                 false,
                 format_args!("{:?}", s),
             );
+            shrinkify("L5", "exhaustive", s, &prop_laminar);
         }
     });
 
@@ -376,6 +378,10 @@ fn main() {
     println!("║ 總失敗數:{}", total_fail);
     println!("╚══════════════════════════════════════════════════════════╝");
     if total_fail > 0 {
+        eprintln!("┌──────────────────────────────────────────────────────────────┐");
+        eprintln!("│ 提示:LAW FAIL 時已自動 ddmin 縮小到最小反例(如上)。             │");
+        eprintln!("│ 設 CL0R0_FIXTURES_DIR=<目錄> 可把最小反例歸檔進 tests/fixtures/  │");
+        eprintln!("└──────────────────────────────────────────────────────────────┘");
         std::process::exit(1);
     }
 }

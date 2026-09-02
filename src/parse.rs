@@ -1204,9 +1204,9 @@ fn clone_subtree(
 pub struct ReparseOut {
     /// 重析後的新樹。
     pub tree: Tree,
-    /// 被重用(未重新解析)的舊節點數。
+    /// 被重用(未重新解析)的舊節點數(新舊對賬的 reused 側)。
     pub reused: usize,
-    /// 舊樹總節點數。
+    /// 重析後**新樹**的總節點數(與 `tree.stats()` 之和一致)。
     pub total: usize,
 }
 

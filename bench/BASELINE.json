@@ -1,0 +1,14 @@
+{
+  "note": "沙箱參考基線(2 核 x86-64,rustc 1.98.0,release fat-LTO)。單位:ms/樣本;newman 為 ms/次(3x4x6)。CI 與此比較,容差 25%(跨環境寬容)。",
+  "generated": "2026-09-02",
+  "values": {
+    "lex": 0.0005,
+    "parse": 0.0038,
+    "laminar": 0.0080,
+    "named_sexp": 0.0077,
+    "l7b_evaluate": 0.0067,
+    "r0_lex": 0.0006,
+    "r0_parse": 0.0029,
+    "newman_3x4x6": 7.8503
+  }
+}

@@ -152,7 +152,12 @@ pub fn extract(t: &Tree) -> Facts {
     };
     let root = t.root();
     let mut scopes: Vec<Vec<usize>> = vec![Vec::new()]; // 作用域棧:每層 block 的綁定
-    walk_item_scope(t, root, &mut facts, &mut scopes);
+                                                        // Root 是語法外殼(span 覆蓋全文,kind 不屬語法面):以它的子節點
+                                                        // (項 / 錯誤區)進入語義面。修復:此前直接以 Root 進入,合法程式的
+                                                        // 事實層恆為空 —— 由 test_law_semantic_extract_breadth 抓出。
+    for c in t.node(root).children.clone() {
+        walk_item_scope(t, c, &mut facts, &mut scopes);
+    }
     facts
 }
 
@@ -186,11 +191,17 @@ fn collect_decls(
     let n = t.node(node);
     match n.kind {
         Kind::FnItem => {
-            let body = child_of_kind(t, node, Kind::Block).unwrap();
+            // 半截 fn(無 body):如實跳過(§2.3 全化 —— 語義面不 panic)。
+            let Some(body) = child_of_kind(t, node, Kind::Block) else {
+                return;
+            };
             scopes.push(Vec::new());
             for &c in &n.children {
                 if t.node(c).kind == Kind::Param {
-                    let name_node = child_of_kind(t, c, Kind::Ident).unwrap();
+                    // 半截參數(無名稱):如實跳過。
+                    let Some(name_node) = child_of_kind(t, c, Kind::Ident) else {
+                        continue;
+                    };
                     // 參數綁定在 fn body 作用域
                     let b = facts.bindings.len();
                     facts.bindings.push(Binding {
@@ -212,7 +223,10 @@ fn collect_decls(
                 let cn = t.node(c);
                 match cn.kind {
                     Kind::LetStmt => {
-                        let name_node = child_of_kind(t, c, Kind::Ident).unwrap();
+                        // 半截 let(無綁定名):如實跳過。
+                        let Some(name_node) = child_of_kind(t, c, Kind::Ident) else {
+                            continue;
+                        };
                         let b = facts.bindings.len();
                         let mut mutable = false;
                         // let [mut]
@@ -309,8 +323,9 @@ impl<'a> EventCollector<'a> {
         let kind = self.t.node(node).kind;
         match kind {
             Kind::FnItem => {
-                let body = child_of_kind(self.t, node, Kind::Block).unwrap();
-                self.walk_node(body, Ctx::Value);
+                if let Some(body) = child_of_kind(self.t, node, Kind::Block) {
+                    self.walk_node(body, Ctx::Value);
+                }
             }
             Kind::Block => {
                 for c in self.t.node(node).children.clone() {
