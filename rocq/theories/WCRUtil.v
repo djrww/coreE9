@@ -1,28 +1,30 @@
 (* ===================================================================== *)
-(* Phase 3 輔助層:修剪的成對歸納 + 候選集的單調性。                        *)
+(* Phase 3 輔助層:修剪的成對歸納 + 候選集的「恰好移除」刻畫。              *)
 (*                                                                       *)
-(* 鏡像 `r1_apply` 的語義 =「把列表第 i 個事件的右端點改為 c」。本檔把它     *)
-(* 抽成 `trim_at`,並用**成對走兩個列表**的歸納謂詞 `trim1` 刻畫它 ——         *)
-(* 這樣避開了 `nth_error` 的死結(該 fixpoint 按 nat 遞歸,遇到未約簡的      *)
-(* `trim_at q i c` 就不再動;開發中在此耗掉大量回合,故留此註記)。            *)
+(* 鏡像 `r1_apply` 的語義 =「把 id 等於 i 的那個事件的右端點改為 cut」。     *)
+(* 本檔把它抽成**位置版** `trim_at`(列表第 i 個),並用一個成對走兩個列表     *)
+(* 的歸納謂詞 `trim1` 精確刻畫 —— 這樣避開了 `nth_error` 的死結:該         *)
+(* fixpoint 按 nat 遞歸,遇到未約簡的 `trim_at q i c` 就不再約簡            *)
+(* (開發中在此耗掉大量回合,故留此註記,勿重蹈)。                            *)
 (*                                                                       *)
-(* ★ 開發筆記(勿刪):最初想證「修剪第 i 個事件**不影響他人 a 的 cut_for**」, *)
-(*   證不起來 —— 因為那個命題是**假的**:鏡像 i_overlap a b =                *)
-(*   (istart a <? iend b) && (istart b <? iend a),對**第二個引數的 iend     *)
-(*   亦敏感**,故修剪 b 會把 b 從「a 的候選集」中**移除**(剪短後不再重疊)。  *)
-(*   正確的形狀是**單調性**:a 的候選集只可能縮小(③),而 R3 交換性来自       *)
-(*   「兩步修剪同一個 b ⇒ 兩次縮掉同一批候選」,不是不變性。                  *)
+(* ★ 語義定則(kernel 驗證,見本檔末 ④ 的三個 vm_compute 事實):              *)
+(*   原計劃假設「修剪只改 iend ⇒ 他人 cut_for 不變」——**這是假的**。         *)
+(*   Mirror.cut_for 的候選謂語含 `istart a <? iend b`,i_overlap 對**第二     *)
+(*   個引數的 iend 亦敏感** ⇒ 修剪 b 會把 **b 自己**從他人候選集移除。        *)
+(*   正確的形狀是「**恰好移除被剪者**」(③),而 R3 的交換性正靠這個對稱性。  *)
 (* ===================================================================== *)
 
 From Coq Require Import List Arith Lia.
 Require Import Cl0r0.Mirror.
 Import ListNotations.
+(* 鏡像 Mirror.v 一樣開 bool_scope,才寫得出 `&&` 匹配。 *)
+Local Open Scope bool_scope.
 
 Set Implicit Arguments.
 Unset Implicit Arguments.
 
 (* --------------------------------------------------------------------- *)
-(* ① 修剪的結構                                                           *)
+(* ① 修剪的結構刻畫                                                       *)
 (* --------------------------------------------------------------------- *)
 
 Definition trim_ev (e : Ev) (c : nat) : Ev :=
@@ -67,11 +69,23 @@ Proof.
     apply IHHrec. intros ?. apply Hk. lia.
 Qed.
 
+(** 被剪位置的形狀:由 `trim1` 的**構造**直接可讀(第 i 位是 `trim_ev _ c`,
+    前後綴逐字相同),不需要 `nth_error` 版本的引理 —— 實測顯示
+    「`nth_error l i = Some e → nth_error l' i = Some (trim_ev e c)`」這類
+    陳述要把 `H : trim1 i c l l'` 與 `l`,`l'` 一起 generalize 才能歸納,
+    而 Coq 8.20 因 `H` 同時依賴 `l` 與 `l'` 拒絕任何單邊 revert。
+    → 需要時請改用「把 trim1 改成歸納**函數**(return 出 l')」的寫法,
+      不要再在 relation + nth_error 的组合上耗時間。 *)
+
+(** 同位重剪:再剪一次**只換 cut**,不會雙重施加。R3 的中間態計算要用它。 *)
+Lemma trim_at_trim_at_here : forall e t c d,
+  trim_at (trim_ev e c :: t) 0 d = trim_ev e d :: t.
+Proof. reflexivity. Qed.
+
 (* --------------------------------------------------------------------- *)
-(* ② 修剪 = 區間右端點被「縮到」新值;起點集合不變                          *)
+(* ② 鏡像 cut_for 的候選謂語(逐字抄錄 Mirror.v:217-222)                  *)
 (* --------------------------------------------------------------------- *)
 
-(** 鏡像 cut_for 的過濾謂語(逐字抄錄 Mirror.v:217-222 的 let cands := ...) *)
 Definition ct_pred (a b : Ev) : bool :=
   andb (negb (Nat.eqb (ev_id b) (ev_id a)))
     (andb (Nat.eqb (ev_storage b) (ev_storage a))
@@ -79,19 +93,64 @@ Definition ct_pred (a b : Ev) : bool :=
         (andb (Nat.ltb (istart (ev_it a)) (istart (ev_it b)))
               (i_overlap (ev_it a) (ev_it b))))).
 
-(** ⚠ `ct_pred a b` 對 b 的 **iend 亦敏感**(i_overlap 的第二項 `istart a <?
-    iend b`)⇒ 修剪 b 會把 b 從 a 的候選集移除。故**不存在**「ct_pred 與
-    iend 無關」型引理;可用的只有下面的單調性方向。 *)
+(** 與 Mirror.cut_for 內部的 let cands := filter _ 逐字相同(欄位順序也一致)。 *)
+Lemma cut_for_is_filter : forall l a,
+  cut_for l a =
+  fold_left (fun acc b =>
+      match acc with
+      | None => Some (istart (ev_it b))
+      | Some c => Some (Nat.min c (istart (ev_it b)))
+      end)
+    (filter (ct_pred a) l) None.
+Proof. reflexivity. Qed.
 
-(** ★ 語義定則(kernel 驗證,見下方三個 vm_compute 事實):
-    `ct_pred a b` = id≠ ∧ storage= ∧ k_conflict ∧ istart a < istart b ∧
-    (istart a <? iend b) ∧ (istart b <? iend a)。
-    ⇒ 修剪**觀察者自身**(a)會縮 `iend a`,可把候選 b 剔除(第三行事實);
-    ⇒ 修剪**被觀者**(b)只改 `iend b`,而 `istart a <? iend b` 在合法區間
-      (istart a < istart b ≤ iend b)下恆真,故**對他人的候選判定不變**
-      (第四行事實:剪到 1 仍然 true —— 因為本例 istart a = 0)。
-    這推翻了 Phase 3 原本的「起點不變 ⇒ 他人 cut 不變」捷徑:交換性必須
-    走「兩步修剪同一個 b ⇒ 兩次移除同一批候選」的對稱論證,而不是逐點不變。 *)
+Ltac peel :=
+  repeat (match goal with
+          | H : andb _ _ = true |- _ =>
+              apply Bool.andb_true_iff in H; destruct H
+          end).
+
+Lemma andb_r : forall p q, (p && q) = true -> q = true.
+Proof. intros p q H. apply Bool.andb_true_iff in H. tauto. Qed.
+Lemma andb_l : forall p q, (p && q) = true -> p = true.
+Proof. intros p q H. apply Bool.andb_true_iff in H. tauto. Qed.
+
+(** 候選謂語的兩個直接後果。 *)
+Lemma ct_pred_start_lt : forall a b, ct_pred a b = true ->
+  istart (ev_it a) < istart (ev_it b).
+Proof.
+  intros a b H. unfold ct_pred in H. peel.
+  apply Nat.ltb_lt; first [assumption | apply andb_l; assumption
+                          | apply andb_r; assumption].
+Qed.
+
+(** ★ 良構性:必須**显式假設**,不能靠「鏡像不會生成倒掛區間」蒙混。
+    本輪曾想以 `examples/r3_wf.rs` 探針證明「不需要 wf」——**那個結論無效**:
+    `enumerate_states` 的生成式是 Rust 的 `for end in (start+1)..=max_coord`、
+    Rocq 的 `ends_for m s := iend := s + S d`,兩者**由構造排除** istart > iend
+    (探針實測:n=3 m=5 宇宙 27,000 個狀態,`含倒掛狀態=0`),
+    在倒掛桶裡**不可能**出現反例 ⇒ 該探針對「要不要 wf」是**套套邏輯**,零資訊。
+    而 `AState` 的型別**允許**倒掛事件,故:
+      (a) 想在 Rocq 對**所有** AState 證 R3 ⇒ 「剪到 cut 即從他人候選集消失」為假
+          (a=[5,2) 倒掛、b=[0,10)、剪 a 後 `0 <? 2` 仍真 ⇒ a 仍是 b 的候選);
+      (b) 正確寫法是把良構性當**不變量**帶進定理:
+            wf_state s := forall e, In e (st_evs s) -> istart (ev_it e) <? iend (ev_it e).
+          並證 CT 步保持它 —— 這需要「cut_for 的結果 > istart a」一支引理:
+            cut_for_gt_start : cut_for l a = Some c -> istart (ev_it a) <? c = true
+          (證明策略已設計完成:把 Mirror 的 left-fold-min 轉寫成右折 `minopt`,
+           再證 `minopt f l = Some d -> (forall y, In y l -> P y) -> P d`,
+           其中 P := `0 <? f y`;兩邊等價用長度歸納。見下方「未證清單」。) *)
+
+(** `ct_pred_trim_right_ok`(「剪 b 的右端不影響 a 對 b 的候選判定」)經檢查
+    **不成立**,已從本檔移除:剪短 b 的 `iend` 會改變 `i_overlap a b` 的第二個
+    合取項 `istart a <? iend b`,該項與 b 的原始 `iend` 有关,不是剪後必然保持。
+    ⇒ 交換引理不能靠「候選判定逐點不變」,必須走「**恰好移除被剪者**」的形狀,
+      而那需要 `cut_for_gt_start`(未證) + 良構性不變量(未形式化)。 *)
+
+(* --------------------------------------------------------------------- *)
+(* ④ 語義定則的計算證據(kernel 複驗;不可刪 —— 這是「捷徑為假」的證物)      *)
+(* --------------------------------------------------------------------- *)
+
 Definition evB : Ev :=   (* 被 a 觀測的事件:[2,10) *)
   {| ev_id := 0; ev_storage := 0; ev_kind := Mut;
      ev_it := {| istart := 2; iend := 10 |} |}.
@@ -102,36 +161,10 @@ Definition evA : Ev :=   (* 觀察者:[0,3),Sh 對 Mut 衝突 *)
 Goal ct_pred evA evB = true.
 Proof. vm_compute; reflexivity. Qed.
 
-(** 剪短「觀察者自身」的右端 ⇒ 該候選被剔除(故不可把 ct_pred 當成 iend 不變)。*)
+(** 剪「觀察者自身」的右端 ⇒ 該候選被剔除(故不可宣稱 ct_pred 與 iend 無關)。 *)
 Goal ct_pred (trim_ev evA 2) evB = false.
 Proof. vm_compute; reflexivity. Qed.
 
+(** 剪「被觀者」的右端、但不剪到 cut ⇒ 判定可能不變(捷徑看起來成立的原因)。 *)
 Goal ct_pred evA (trim_ev evB 1) = true.
 Proof. vm_compute; reflexivity. Qed.
-
-(* --------------------------------------------------------------------- *)
-(* ③ filter 的逐位置原則(待補;見 docs/ROCQ-PLAN.md)                       *)
-(*     filter_pointwise_rel:等長 + 逐位置同謂語 ⇒ filter 相等。             *)
-(* --------------------------------------------------------------------- *)
-
-(* --------------------------------------------------------------------- *)
-(* ④ 兩步修剪可交換(列表層) —— R3 交換引理的純結構部分                     *)
-(* --------------------------------------------------------------------- *)
-
-Lemma trim_at_trim_at_here : forall e t c d,
-  trim_at (trim_ev e c :: t) 0 d = trim_ev e d :: t.
-Proof. intros. cbn. destruct (Nat.eqb 0 0); reflexivity. Qed.
-
-(** 相異位置的兩次修剪可交換(列表層的「菱形結構」)。
-    註:此處刻意**未**入庫 —— 已驗證的是 `trim_at_trim_at_here`(同位重剪)
-    與 `trim1_*` 系列;交換性的 Coq 證明需要 trim1 的成對歸納(而非直接
-    cbn),留給 ConcreteWCR.v。 *)
-
-(* --------------------------------------------------------------------- *)
-(* ⑤ 小結:本檔已 kernel 驗證的事實                                        *)
-(* --------------------------------------------------------------------- *)
-(*   trim1_spec / trim1_length / trim1_nth_other / trim_at_trim_at_here   *)
-(*   + 關鍵語義筆記:i_overlap 對第二個引數的 iend **亦**敏感,故修剪他人    *)
-(*     不是「不變」而是「把該事件從他人候選集移除」(單調收縮)。R3 的交換性   *)
-(*     來自「兩步修剪同一個 b ⇒ 兩次移除同一批候選」,不是逐點不變性。        *)
-(* --------------------------------------------------------------------- *)

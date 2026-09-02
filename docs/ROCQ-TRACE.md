@@ -24,7 +24,7 @@
 | R4 | `newman_unf`(唯一正規形) | 同上 | ✅ 已證(推論) | L9a |
 | R4′ | `exists_normal_form`(正規形存在) | 同上 | ✅ 已證 | L8b(μ 保證終止) |
 | R2 | 具體 SN:`sn step_ct`(CommutativeTrim × Guarded)| `rocq/theories/ConcreteSN.v` | ✅ 已證(2026-09-02)| L8a/L8b(窮舉) |
-| R3 | 具體 WCR(交換引理 + 臨界對)— **數學核心** | `rocq/theories/WCRUtil.v`(輔助層已入庫)/ `ConcreteWCR.v`(待建)| 🔶 Phase 3 開工:輔助層 `trim1_*` 已 kernel 驗證;**原捷徑已否證**,主定理未完成 | L9b 窮舉(4×6 共 623,616 狀態 × 635,424 臨界對,0 違反)+ **本輪前測:精確交換在未過濾 4×6(3,111,696 狀態 / 2,443,506 對)全綠** |
+| R3 | 具體 WCR(交換引理 + 臨界對)— **數學核心** | `rocq/theories/WCRUtil.v`(輔助層已入庫)/ `ConcreteWCR.v`(待建)| 🔶 Phase 3 第二輪:`trim1_*` + `cut_for_is_filter` + `ct_pred_start_lt` 已 kernel 驗證;**原捷徑已否證**;倒掛宇宙實測不破壞精確交換但**不能**當前提;主定理未完成 | L9b 窮舉(4×6 共 623,616 狀態 × 635,424 臨界對,0 違反)+ **本輪前測:精確交換在未過濾 4×6(3,111,696 狀態 / 2,443,506 對)全綠** |
 | R5 | L7b 迭代淨化終止 + 不動點 | — | ⬜ Phase 4 | L7b / `l7b_evaluate` |
 | R6 | T2 χ = ω(max_overlap = greedy_chromatic)| — | ⬜ Phase 5 | `test_theorem_T2_interval_graphs_are_perfect`(400 樣本) |
 | R7 | NaiveMenu 反例存在性 | — | ⬜ Phase 6(選配)| L9c 機器反例 |
@@ -72,13 +72,48 @@ Rocq 定理的 ∀ 陳述亦不需該假設。
 | `trim1_spec` | `trim1 i c l (trim_at l i c)` —— 用**成對歸納**精確刻畫修剪 |
 | `trim1_length` | 修剪不改變列表長度 |
 | `trim1_nth_other` | `k <> i ⇒ nth_error l' k = nth_error l k`(非修剪位逐字相同)|
+| `trim1_nth_here` | **本輪移除** — 想寫成 `nth_error l i = Some e → nth_error l' i = Some (trim_ev e c)`,但 `H : trim1 i c l l'` 同時依賴 `l` 與 `l'`,Coq 8.20 拒絕任何單邊 `revert`;改由 `trim1` 的**構造**直接讀取(見檔內註記) |
+| `cut_for_is_filter` | `Mirror.cut_for l a` = `fold_left … (filter (ct_pred a) l) None`(`reflexivity` 級,把鏡像實作與候選謂語**釘死**) |
+| `ct_pred_start_lt` | `ct_pred a b = true → istart a < istart b`(候選集元素的起點**嚴格更晚** —— 這是 `cut_for > istart` 的引擎) |
 | `trim_at_trim_at_here` | 同位重剪:`trim_at (trim_ev e c :: t) 0 d = trim_ev e d :: t` |
+| `andb_l`/`andb_r`/`peel` | bool 合取拆解小件(鏡像 `ct_pred` 是五層 `&&`)|
 | 三個 `vm_compute` 事實 | `ct_pred evA evB = true`;`ct_pred (trim_ev evA 2) evB = false`;`ct_pred evA (trim_ev evB 1) = true` |
 
 **本輪最重要產出是「否證」**:原計劃 R3 的捷徑「start 不變 ⇒ 他人 `cut_for`
 不變」為**假** —— `Mirror.cut_for` 的候選謂語含 `istart a <? iend b`,故被剪者
 會從他人的候選集消失(上表第 6 列即此事實的計算證據)。改走的路線與剩餘缺口
 見 `docs/ROCQ-PLAN.md` §三-R3「開工實測」。
+
+### R3 第二輪(2026-09-02,良構性問題 + `fold_left` 障礙)
+
+**新增探針 `examples/r3_wf.rs`(含自我否證)**:我上一輪推測「剪 a 到 cut 即把
+a 從他人候選集移除」需要區間良構性 `istart ≤ iend`,並想用探針確認。第一版**失敗
+且失敗得有價值** —— 它只跑 `enumerate_states`,而該生成式是 Rust
+`for end in (start+1)..=max_coord` / Rocq `ends_for m s := iend := s + S d`,
+**由構造排除**倒掛區間(實測 n=3 m=5:27,000 狀態、含倒掛 **0**)⇒ 「倒掛桶」恆空,
+那個「全綠」對問題本身是**套套邏輯**。我沒有接受它,改寫成第二節**自行枚舉允許倒掛**
+的宇宙(end 取 `0..=m`,不要求 `> start`):
+
+| 宇宙(允許倒掛) | 狀態數 | 含倒掛 | CT peers | 非精確交換 |
+|---|---|---|---|---|
+| n=3 m=3 | 32,768 | 24,768 | 387 | **0** |
+| n=3 m=4 | 125,000 | 98,000 | 2,259 | **0** |
+| n=3 m=5 | 373,248 | 299,160 | 8,757 | **0** |
+
+⇒ **倒掛樣本不破壞精確交換**(實測層面 wf 前提可能不必要)。但要注意:**機制不同** —
+手工算 a=[5,2)、b=[0,10) 可知「被剪者從候選集消失」這條捷徑在倒掛下**仍為假**;
+全綠來自别的候選把 min 撐住,不是來自捷徑成立。所以**不能**把探針結果寫成定理前提,
+Rocq 側仍需「候選集變化 ⇒ min 不變」的刻畫。
+
+**未證(誠實申報,主定理仍未闭合)**:
+1. `cut_for_gt_start : cut_for l a = Some c → istart a <? c = true` —— 這是 wf
+   不變量與「剪到 cut 仍保持 `istart < iend`」的唯一缺口。**證明策略已設計完成**
+   (把 `fold_left`-min 轉寫成右折 `minopt`,證 `minopt f l = Some d → (∀ y ∈ l, P y) → P d`,
+   再證兩形等價),但 `fold_left` 在 Coq 8.20 下 `cbn` 會**過度約簡**掉
+   `match None with` 使 `injection` 無從注入(本輪在此卡住,已試 `cbn [fold_left]`、
+   `case_eq`、`destruct … eqn`、`revert` 各種組合)。
+2. `ct_join_exact` / `R3_ct_wcr` / `R4_ct_confluent`:未開工(`ConcreteWCR.v` 尚未建檔,
+   故意不建空檔)。
 
 **工程教訓(供後續輪次省時,已寫進 `WCRUtil.v` 頭註)**:
 1. `nth_error` 按 nat 遞歸,遇到未約簡的 `trim_at q i c` 即卡死 ⇒ 改走

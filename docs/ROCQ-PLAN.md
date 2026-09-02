@@ -139,8 +139,46 @@ i_overlap a b = (istart a <? iend b) ∧ (istart b <? iend a)
 4. 尚**未**完成的部分(誠實申報,屬下一輪):把 3 對稱性收斂成
    `cut_for` 層等式(`cut_for t1 a = cut_for t2 b'` 之類),以及
    `R3_ct_wcr` / `R4_ct_confluent` 主定理。目前 `rocq/theories/WCRUtil.v`
-   只入庫結構層(① trim1 三引理 + ② 三個 vm_compute 語義事實),
-   不含任何 `Admitted`/`Axiom`,`make -C rocq` 全綠。
+   只入庫結構層 + 候選謂語層(`trim1_spec`/`trim1_length`/`trim1_nth_other`/
+   `trim_at_trim_at_here`、`cut_for_is_filter`、`ct_pred_start_lt`、三個
+   vm_compute 語義事實),**不含任何 `Admitted`/`Axiom`**,`make -C rocq` 全綠。
+
+#### R3 第二輪(2026-09-02):良構性之爭 + `fold_left` 是目前的硬阻擋
+
+**(a) 第 3 點的「合法區間下恆真」需要**显式**不变量,不能默認。**
+鏡像的 `AState` 型別**允許** `istart > iend` 的倒掛事件,故第 3 點的捷徑對
+**所有** `AState` 為假(a=[5,2)、b=[0,10):剪 a 後 `istart b <? iend a` = `0 <? 2` 仍真
+⇒ a 仍在 b 的候選集)。正確做法是把良構性當**不變量**帶進 R3:
+
+```coq
+Definition wf_state (s : AState) : Prop :=
+  forall e, In e (st_evs s) -> istart (ev_it e) <? iend (ev_it e) = true.
+```
+
+而「CT 步保持 wf」恰好**只差一支引理** `cut_for_gt_start`。
+
+**(b) 探針不得自欺:`examples/r3_wf.rs` 的第一版是套套邏輯。**
+它只跑 `enumerate_states`,而該生成式(Rust `for end in (start+1)..=max_coord`;
+Rocq `ends_for m s := iend := s + S d`)**由構造排除**倒掛 ⇒ 倒掛桶恆空
+(實測 n=3 m=5:27,000 狀態、含倒掛 0 個)。第二節改為**自行枚舉允許倒掛**的宇宙,
+實測:n=3 m=3/4/5 → 98,000 / 299,160 個含倒掛狀態,CT peers 387 / 2,259 / 8,757,
+**非精確交換全為 0**。結論:倒掛不破壞精確交換,但**機制不是**捷徑成立
+(是别的候選撐住 min),故**不可**拿探針結果省掉第 (a) 點的论证。
+
+**(c) 目前唯一的硬阻擋(technical)**:`cut_for_gt_start` 需要從
+`fold_left (fun acc y => Some (Nat.min …)) l None = Some k` 推出界性質。
+Coq 8.20 下 `cbn in H` 會**順帶約簡 `match None with … end`**,把假設壓成
+`Some (Nat.min (istart (ev_it x)) m) = Some k`,令 `injection` 無東西可注入;
+`cbn [fold_left]`、`case_eq`、`destruct … eqn:Hm`、`revert`/`generalize` 各種組合
+皆試過仍卡在同一處。**可行的解法(下一輪照做,別再硬幹)**:不要碰 `fold_left`,
+先另立右折 `minopt`(結構上天然歸約),證 `minopt_agree`(兩形等價,對 `l` 歸納、
+`acc`/`d` 用 `intros f l acc d.` 全量引入)與 `minopt_pos`(min 保持 `0 <? ·`),
+再由 `ct_pred_start_lt` 餵 `minopt_pos`。本輪已寫到 `minopt` 版本,`Qed` 尚未全綠。
+
+**(d) 另一條省時教訓**:`trim1` 是 Prop 關係,`H : trim1 i c l l'` 同時依賴 `l` 與 `l'`
+⇒ Coq **拒絕**單邊 `revert`(「l is used in hypothesis H」)。要對 `nth_error` 形狀的
+陳述做歸納,得**一開始就把 l、l'、e、He 全部留在目標裡**(`induction H as […]; intros …`),
+或直接改用**歸納函數**(return 出 `l'`)。本輪據此把 `trim1_nth_here` 移出檔案。
 
 ### R4 · 唯一正規形 — 易
 - R1–R3 拼上即得;規範化函數用 `Fix`(在 SN 的良基關係上)。
