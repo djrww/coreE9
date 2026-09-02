@@ -105,6 +105,14 @@ a 從他人候選集移除」需要區間良構性 `istart ≤ iend`,並想用�
 全綠來自别的候選把 min 撐住,不是來自捷徑成立。所以**不能**把探針結果寫成定理前提,
 Rocq 側仍需「候選集變化 ⇒ min 不變」的刻畫。
 
+**已定位的病根(kernel 級實測,不是推測)**:Coq 8.20 的 `cbn`/`simpl` 對
+`List.fold_left` **不約簡**(列表/累加器為變數時),但 `change … with …` 與
+`reflexivity` 級的 `fold_left_nil/cons` 引理**可用** —— 這解釋了本輪十幾則
+「`injection`/`discriminate` 說沒有等式可拆」的詭異錯誤:前面的 `cbn in Hf` 根本是空轉。
+修正後骨架已推通 base 與 cons 主幹;可用形態與最後一步的具體對齊問題
+逐字記錄在 `docs/ROCQ-PLAN.md` §三-R3 (c′)(c″)(含「cons 分支不要 `cbn`、
+只用 `change` 走一步,否則目標會被連帶展成 `match 0 with … end` 而 `apply IH` 不可統一」)。
+
 **未證(誠實申報,主定理仍未闭合)**:
 1. `cut_for_gt_start : cut_for l a = Some c → istart a <? c = true` —— 這是 wf
    不變量與「剪到 cut 仍保持 `istart < iend`」的唯一缺口。**證明策略已設計完成**

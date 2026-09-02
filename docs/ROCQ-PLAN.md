@@ -165,7 +165,56 @@ Rocq `ends_for m s := iend := s + S d`)**由構造排除**倒掛 ⇒ 倒掛桶�
 **非精確交換全為 0**。結論:倒掛不破壞精確交換,但**機制不是**捷徑成立
 (是别的候選撐住 min),故**不可**拿探針結果省掉第 (a) 點的论证。
 
-**(c) 目前唯一的硬阻擋(technical)**:`cut_for_gt_start` 需要從
+**(c′) **病根(實測,非推測)**:Coq 8.20 的 `cbn`/`simpl` **不會約簡 `List.fold_left`**
+   —— 當列表引數是**變數**時(如 `fold_left g [] acc`,`acc` 是變數),約簡引擎停住;
+   但**定義上確實相等**:`change (fold_left g [] acc) with acc in Hf` 成功,
+   `Lemma fold_left_nil : fold_left f nil acc = acc. Proof. reflexivity. Qed.` 也直接過。
+   ⇒ 前面十幾回合所有「`cbn in Hf` 後 expect 一個可 injection 的形状」都是**空轉**
+   (`cbn` 什麼也沒做,錯誤訊息卻指向後續的 `discriminate`/`injection`,誤導到別處)。
+   **正解套路(後續一律照做)**:
+     1. 需要約簡 fold 時,用 `change … with …`(或 reflexivity 級的 `fold_left_nil`/
+        `fold_left_cons` 引理 + `rewrite`),**不要**指望 `cbn in H`。
+     2. 帰納時把 `acc`/`d` 一起 generalize:`intros A P g acc l d. revert acc d.`
+        (`revert` 只能用在**已 intro** 的變數上;`intros` 少一個名字就報
+        「No such hypothesis / was not found」,這是本輪另一類高頻錯誤)。
+     3. `IH` 的假設順序要和**陳述一致**再 `apply (IH acc' d' Hacc' Hg' Hf')`,
+        或乾脆 `apply (IH acc' d').` 讓 Coq 自己排 subgoal(用 `*`/`+` 而非 `-`/`--`,
+        本輪因 bullet 級別錯位多燒了 3 回合)。
+     4. `In y (x :: t)` 用 `apply (proj1 (in_cons x y t)) in Hy` 拆成 `y = x` / `In y t`,
+        **不要**用 `destruct Hy`(`In` 是 fixpoint,destruct 報「Not an inductive definition」)、
+        更不要 `simpl in Hy; intuition`(會連別假設一起重命名,把 `y` 改成 `option A`
+        之類,之後所有 `specialize` 全部對不上)。
+   骨架已推通 base 與 cons 主幹(見 (c″))。**實測可用的形態**是這個(把 P 收進
+   `match … with Some k => P k | None => True end`,結論也同形,才不需要 `change` 灌 match):
+
+```coq
+Definition minacc (f : Ev -> nat) : option nat -> Ev -> option nat :=
+  fun ao y => match ao with None => Some (f y) | Some c => Some (Nat.min c (f y)) end.
+
+Lemma fold_left_minacc : forall (f : Ev -> nat) (l : list Ev) (acc : option nat),
+  (match acc with None => True | Some a => 0 <? a = true end) ->
+  (forall y, In y l -> 0 <? f y = true) ->
+  match fold_left (minacc f) l acc with Some k => 0 <? k = true | None => True end.
+```
+
+(c″) **本輪收尾狀態(逐字記錄,下一輪直接接)**:
+   * `intros f l acc. revert acc.` + `induction l` ⇒ IH 形如
+     `match acc0 with Some a => 0 <? a = true | None => True end -> (∀ y ∈ t, …) -> …`,
+     **累加器必須是變數 `acc0`**,不能在 cons 分支先 `cbn` 把它算成 `minacc f (Some a) x`
+     —— 因為 `cbn` 也會同時把**目標裡**的 `0 <? ·` 展成 `match … with 0 => false | S _ => true end`,
+     於是 `apply IH` 報 `Unable to unify`。正解:cons 分支**只用 `change` 走一步**
+     `fold_left (minacc f) (x::t) acc0  ⇒  fold_left (minacc f) t (minacc f acc0 x)`,
+     讓 `acc0` 保持變數;`0 <? Nat.min … = true` 那一邊才用
+     `change (match Some e with Some k => 0 <? k = true | None => True end) with (0 <? e = true)`
+     (方向是**把 match 收成 ltb**,反向會 Not convertible)。
+   * 尚未過的最後一步:上述 cons 分支 `apply IH` 後的第一個 subgoal
+     (`0 <? Nat.min (istart x) a = true`,由 `Hacc : 0 <? a = true` 與 `0 <? f x = true` 得),
+     已確認只差把 `Nat.min_spec`/`le_lt_dec` 的 case 與 `Hacc` 的形狀對齊
+     (`Hacc` 是 `0 <? a = true` ⇒ 先 `apply Nat.ltb_lt in Hacc` 轉成 `0 < a` 再 `lia`)。
+   * 過掉 `fold_left_minacc` 之後,`cut_for_gt_start` 就是三行:
+     `unfold cut_for; rewrite cut_for_is_filter;` 把 fold 改寫成 `minacc (istart ∘ ev_it)` 形
+     (用 `change`,因為 `cut_for_is_filter` 右側是 anonymous fun),再 `apply fold_left_minacc`,
+     `Hf` 用 `ct_pred_start_lt` 供。主定理 `ct_join_exact`/`R3_ct_wcr` 才接得上。**:`cut_for_gt_start` 需要從
 `fold_left (fun acc y => Some (Nat.min …)) l None = Some k` 推出界性質。
 Coq 8.20 下 `cbn in H` 會**順帶約簡 `match None with … end`**,把假設壓成
 `Some (Nat.min (istart (ev_it x)) m) = Some k`,令 `injection` 無東西可注入;
