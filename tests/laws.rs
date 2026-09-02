@@ -229,7 +229,8 @@ fn test_law_L7b_structural_maximality() {
         }
         // 到達不動點;殘餘只允許切縫 / EOF 處的空錯誤(缺失內容)。
         // 機械化版本(tree::l7b_evaluate)必須給出同一判定(P1 #6 覆蓋與契約複驗)。
-        let (mech_bad, mech_rounds) = cl0r0::tree::l7b_evaluate(&half);
+        let (mech_bad, mech_rounds) = cl0r0::tree::l7b_evaluate(&half)
+            .expect("l7b_evaluate must be total on generated half-files");
         assert_eq!(
             (mech_bad == 0, mech_rounds < 8),
             (bad.is_empty(), rounds < 8),
@@ -245,6 +246,65 @@ fn test_law_L7b_structural_maximality() {
         );
         let _ = clean;
     }
+}
+
+// ===========================================================================
+// L7b′ 機器界如實申報:深嵌套 ⇒ `Err(Depth)`,不得 panic(健檢 P0-2 / H2)
+// ===========================================================================
+
+#[test]
+fn test_l7b_depth_reported_not_panicked() {
+    // `parse` 在遞迴 ≥ RECURSION_LIMIT 時回 `Err(ParseIssue::Depth)` —— 這是
+    // 引擎的**機器界**,是刻意宣佈的,不是 bug。`tree::l7b_evaluate` 必須把
+    // 這個界原樣傳出去;舊版在內部 `parse(..).unwrap()`,任何超過門檻的深嵌套
+    // 輸入都會 panic,連 fuzz 行程一起 abort(而 fuzz 的職責是「回報違反」)。
+    //
+    // 測試刻意**不硬編碼**具體門檻:`RECURSION_LIMIT` 或深度記帳方式改了也不該紅,
+    // 要紅的是「該回 Err(Depth) 的輸入變成 panic 或被悄悄吞掉」。
+    use cl0r0::parse::ParseIssue;
+
+    let deep = |k: usize| format!("fn f() {}{{ let x = 1; }}", "{".repeat(k));
+
+    // (i) 找出機器界:第一個讓 `parse` 回 Err 的嵌套層數。
+    let mut bound: Option<usize> = None;
+    for k in 1..1024usize {
+        if parse(&deep(k)).is_err() {
+            bound = Some(k);
+            break;
+        }
+    }
+    let bound = bound.expect("deeply nested input must eventually hit the engine's bound");
+    assert!(
+        bound > 1,
+        "the engine bound must not degenerate to trivial nesting, got {bound}"
+    );
+
+    // (ii) 界以下:l7b 正常淨化(不回 Err)。
+    let (bad, rounds) = cl0r0::tree::l7b_evaluate(&deep(bound - 1))
+        .unwrap_or_else(|e| panic!("below bound k={} must be Ok, got {:?}", bound - 1, e));
+    assert!(
+        bad == 0 && rounds < 8,
+        "L7b must purify below the bound: bad={bad} rounds={rounds}"
+    );
+
+    // (iii) 界以上:l7b 必須**回傳** Err(Depth),而不是 panic。
+    for k in [bound, bound + 1, bound * 2, bound * 4] {
+        assert_eq!(
+            cl0r0::tree::l7b_evaluate(&deep(k)),
+            Err(ParseIssue::Depth),
+            "l7b_evaluate must report the machine bound (not panic) at k={k}"
+        );
+    }
+
+    // (iv) 同一個輸入,`parse` 本身也必須如實申報機器界
+    //      (`Tree` 未實作 `PartialEq`,故用 `matches!` 而非 `assert_eq!`)。
+    assert!(
+        matches!(parse(&deep(bound)), Err(ParseIssue::Depth)),
+        "parse must report Depth rather than pretend to be total"
+    );
+
+    // (v) 「全化」的口徑因此必須說清楚:見 docs/SPEC-TRACE §三 的修訂
+    //     —— 全化 = 永不 panic + 零丟失;機器界(Depth)是**申報**,不是失敗。
 }
 
 #[test]
@@ -1041,6 +1101,18 @@ fn test_law_r0_error_paths_total() {
         "fn f() { x. ; }",
         "fn f() { x .. ; }",
         "fn f() { x = ; }",
+        // ---- 健檢 H3:`else if` 截斷於 EOF ----
+        // 舊版 `R0Parser::close()` 寫 `self.stack.pop().unwrap()`:
+        // `stmt_err`/`item_err` 的 `unwind_to(frame)` 會把棧退過頭(內外層
+        // `else if` 共用同一個 frame),外層接著的 close() 便 panic。
+        // 這正是增量解析 / LSP 的日常輸入形狀(程式寫到一半)。
+        "fn n(){if 1{}else if",
+        "fn f() { if x { } else if",
+        "fn f() { if x { } else if }",
+        "fn f() { if x { } else if y",
+        "fn f() { if x { } else if x { } else if",
+        // ---- 健檢 H1:`&` 後接非 ASCII 識別字(合法 Rust)----
+        "fn f() { let x = &αβ; }",
     ];
     for src in cases {
         let t = cl0r0::r0::r0_parse(src).expect("total (no Err)");

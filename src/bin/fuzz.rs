@@ -63,9 +63,11 @@ fn main() {
             })
             .unwrap_or(true)
     };
-    let prop_l7b = |s: &str| {
-        let (bad, rounds) = l7b_evaluate(s);
-        bad > 0 || rounds >= 8
+    let prop_l7b = |s: &str| match l7b_evaluate(s) {
+        Ok((bad, rounds)) => bad > 0 || rounds >= 8,
+        // 引擎機器界(`ParseIssue::Depth`)是**如實申報**,不是律違反;
+        // 更要緊的是它絕不可以是 panic —— 舊版 unwrap 會讓整支 fuzz abort。
+        Err(_) => false,
     };
     /// 失敗 → ddmin 最小反例 → 打印;CL0R0_FIXTURES_DIR 設定時歸檔。
     fn shrinkify(law: &str, kind: &str, src: &str, prop: &dyn Fn(&str) -> bool) {
@@ -204,16 +206,19 @@ fn main() {
         let half = gen_half_file(&mut rng, &legal);
         // (a)+(b) 結構極大化與迭代淨化(機械檢查在 `tree::l7b_evaluate`;
         //     斷言語義與 tests/laws.rs 的 L7b 完全一致)。
-        let (bad, rounds) = l7b_evaluate(&half);
-        if bad > 0 || rounds >= 8 {
-            fail(
-                &mut stats,
-                "L7b",
-                "iterative-purify",
-                false,
-                format_args!("half={:?} bad={} rounds={}", half, bad, rounds),
-            );
-            shrinkify("L7b", "iterative-purify", &half, &prop_l7b);
+        match l7b_evaluate(&half) {
+            Ok((bad, rounds)) if bad > 0 || rounds >= 8 => {
+                fail(
+                    &mut stats,
+                    "L7b",
+                    "iterative-purify",
+                    false,
+                    format_args!("half={:?} bad={} rounds={}", half, bad, rounds),
+                );
+                shrinkify("L7b", "iterative-purify", &half, &prop_l7b);
+            }
+            // `Err(Depth)` = 引擎的機器界(如實申報),不算 L7b 違反。
+            _ => {}
         }
     }
 
