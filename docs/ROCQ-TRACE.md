@@ -109,9 +109,9 @@ Rocq 側仍需「候選集變化 ⇒ min 不變」的刻畫。
 `List.fold_left` **不約簡**(列表/累加器為變數時),但 `change … with …` 與
 `reflexivity` 級的 `fold_left_nil/cons` 引理**可用** —— 這解釋了本輪十幾則
 「`injection`/`discriminate` 說沒有等式可拆」的詭異錯誤:前面的 `cbn in Hf` 根本是空轉。
-修正後骨架 `fold_left_inv`(抽象 P + g 每步保 P,不碰 Mirror 的 fold)已推通
-base 與 cons 主幹,**只剩 cons 裡一個 `In` 分支的 specialize 對齊**。
-四點省時套路寫進 `docs/ROCQ-PLAN.md` §三-R3 (c′)。
+修正後骨架已推通 base 與 cons 主幹;可用形態與最後一步的具體對齊問題
+逐字記錄在 `docs/ROCQ-PLAN.md` §三-R3 (c′)(c″)(含「cons 分支不要 `cbn`、
+只用 `change` 走一步,否則目標會被連帶展成 `match 0 with … end` 而 `apply IH` 不可統一」)。
 
 **未證(誠實申報,主定理仍未闭合)**:
 1. `cut_for_gt_start : cut_for l a = Some c → istart a <? c = true` —— 這是 wf

@@ -184,9 +184,37 @@ Rocq `ends_for m s := iend := s + S d`)**由構造排除**倒掛 ⇒ 倒掛桶�
         **不要**用 `destruct Hy`(`In` 是 fixpoint,destruct 報「Not an inductive definition」)、
         更不要 `simpl in Hy; intuition`(會連別假設一起重命名,把 `y` 改成 `option A`
         之類,之後所有 `specialize` 全部對不上)。
-   骨架 `fold_left_inv`(抽象到「P + g 每步保 P」,**完全不用碰 Mirror 的 fold**)已推通
-   base 與 cons 的主幹,只剩 cons 裡一個 `In` 分支的 `specialize` 對齊;
-   該 lemma 與上述四點是下一輪的起點,勿從頭再寫。**:`cut_for_gt_start` 需要從
+   骨架已推通 base 與 cons 主幹(見 (c″))。**實測可用的形態**是這個(把 P 收進
+   `match … with Some k => P k | None => True end`,結論也同形,才不需要 `change` 灌 match):
+
+```coq
+Definition minacc (f : Ev -> nat) : option nat -> Ev -> option nat :=
+  fun ao y => match ao with None => Some (f y) | Some c => Some (Nat.min c (f y)) end.
+
+Lemma fold_left_minacc : forall (f : Ev -> nat) (l : list Ev) (acc : option nat),
+  (match acc with None => True | Some a => 0 <? a = true end) ->
+  (forall y, In y l -> 0 <? f y = true) ->
+  match fold_left (minacc f) l acc with Some k => 0 <? k = true | None => True end.
+```
+
+(c″) **本輪收尾狀態(逐字記錄,下一輪直接接)**:
+   * `intros f l acc. revert acc.` + `induction l` ⇒ IH 形如
+     `match acc0 with Some a => 0 <? a = true | None => True end -> (∀ y ∈ t, …) -> …`,
+     **累加器必須是變數 `acc0`**,不能在 cons 分支先 `cbn` 把它算成 `minacc f (Some a) x`
+     —— 因為 `cbn` 也會同時把**目標裡**的 `0 <? ·` 展成 `match … with 0 => false | S _ => true end`,
+     於是 `apply IH` 報 `Unable to unify`。正解:cons 分支**只用 `change` 走一步**
+     `fold_left (minacc f) (x::t) acc0  ⇒  fold_left (minacc f) t (minacc f acc0 x)`,
+     讓 `acc0` 保持變數;`0 <? Nat.min … = true` 那一邊才用
+     `change (match Some e with Some k => 0 <? k = true | None => True end) with (0 <? e = true)`
+     (方向是**把 match 收成 ltb**,反向會 Not convertible)。
+   * 尚未過的最後一步:上述 cons 分支 `apply IH` 後的第一個 subgoal
+     (`0 <? Nat.min (istart x) a = true`,由 `Hacc : 0 <? a = true` 與 `0 <? f x = true` 得),
+     已確認只差把 `Nat.min_spec`/`le_lt_dec` 的 case 與 `Hacc` 的形狀對齊
+     (`Hacc` 是 `0 <? a = true` ⇒ 先 `apply Nat.ltb_lt in Hacc` 轉成 `0 < a` 再 `lia`)。
+   * 過掉 `fold_left_minacc` 之後,`cut_for_gt_start` 就是三行:
+     `unfold cut_for; rewrite cut_for_is_filter;` 把 fold 改寫成 `minacc (istart ∘ ev_it)` 形
+     (用 `change`,因為 `cut_for_is_filter` 右側是 anonymous fun),再 `apply fold_left_minacc`,
+     `Hf` 用 `ct_pred_start_lt` 供。主定理 `ct_join_exact`/`R3_ct_wcr` 才接得上。**:`cut_for_gt_start` 需要從
 `fold_left (fun acc y => Some (Nat.min …)) l None = Some k` 推出界性質。
 Coq 8.20 下 `cbn in H` 會**順帶約簡 `match None with … end`**,把假設壓成
 `Some (Nat.min (istart (ev_it x)) m) = Some k`,令 `injection` 無東西可注入;
