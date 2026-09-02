@@ -1,0 +1,105 @@
+# ROCQ 形式化對照表(ROCQ-TRACE)
+
+> Phase 0/1 對帳文件(2026-09-02)。主計劃見 `docs/ROCQ-PLAN.md`。
+> 本檔 = 「Rocq 定理 ↔ 律 ↔ 具名測試 ↔ 鏡像決策」的機械對照與現況。
+> 紀律:每條 Rocq 陳述必須能指回 Rust 側的律/測試;反之亦然。
+
+---
+
+## 零、環境(可重建性)
+
+| 工具 | 版本 | 安裝方式 |
+|---|---|---|
+| coqc | 8.20.1(Debian trixie 套件;官方 9.x 為後備,敘述不變) | `apt-get install coq libcoq-mathcomp-ssreflect` |
+| mathcomp-ssreflect | 2.3.0 | 同上 |
+| rustc / cargo | 1.98.0 stable | `rustup-init`(沙箱快照不含 ~/.rustup/工具鏈與 .cargo/bin 符號連結,換環境須重建:`scripts/setup_dev.sh`) |
+
+---
+
+## 一、定理現況
+
+| 編號 | Rocq 定理 | 檔案 | 狀態 | Rust 側對應(證人) |
+|---|---|---|---|---|
+| R1 | `newman : sn r -> wcr r -> confluent r` | `rocq/theories/AbstractArs.v` | ✅ 已證(2026-09-02) | L9a/L9b/L9c 窮舉 |
+| R4 | `newman_unf`(唯一正規形) | 同上 | ✅ 已證(推論) | L9a |
+| R4′ | `exists_normal_form`(正規形存在) | 同上 | ✅ 已證 | L8b(μ 保證終止) |
+| R2 | 具體 SN:`sn step_ct`(CommutativeTrim × Guarded)| `rocq/theories/ConcreteSN.v` | ✅ 已證(2026-09-02)| L8a/L8b(窮舉) |
+| R3 | 具體 WCR(交換引理 + 臨界對)— **數學核心** | — | ⬜ Phase 3 | L9b 窮舉(4×6 共 623,616 狀態 × 635,424 臨界對,0 違反) |
+| R5 | L7b 迭代淨化終止 + 不動點 | — | ⬜ Phase 4 | L7b / `l7b_evaluate` |
+| R6 | T2 χ = ω(max_overlap = greedy_chromatic)| — | ⬜ Phase 5 | `test_theorem_T2_interval_graphs_are_perfect`(400 樣本) |
+| R7 | NaiveMenu 反例存在性 | — | ⬜ Phase 6(選配)| L9c 機器反例 |
+
+**證明提要(R2)**:`guarded_apply_decreases`(Guarded 合法施用 ⇒ sd(µ′,µ)=true,
+由 applicable 之 filter 內涵)、`sd0_lt`(第二分量恆 0 ⇒ 化為 |E_red| 遞減)、
+`step_measure_lt`(單步 ⇒ 紅邊計數嚴格遞減)、`R2_sn_step_ct`
+(以 `well_founded_lt_compat` 由 nat 良基導出 SN)、`ct_guarded_has_nf`
+(R4′ × R2:每狀態有有限規約路徑達正規形;唯一性待 Phase 3 合流)。
+對帳新增 `ct_step_measure=0`(canon 之 Guarded 首步紅邊歸零,Rocq/Rust 一致)。
+
+**證明提要(R1)**:Huet 式。`star`(反射傳遞閉包)/ `joinable` / `wcr` / `confluent` /
+`nf` 定義於 `AbstractArs.v`;`sn r := well_founded (fun x y => r y x)`(Coq 的
+Acc 反向歸納恰給「∀a′, r a a′ → P a′」的推進 IH)。
+主定理在 `Acc` 上同時歸納兩個性質:Q a(一步 vs 多步,「strip」)與 P a(多步 vs
+多步);wcr 供 Q 的步進,IH 供 P 的步進。構造式,未用排中律(唯
+`exists_normal_form` 用 `classic` 判別「是否存在一步」)。
+
+---
+
+## 二、鏡像決策(D1–D6,Phase 0-b)
+
+> 完整鏡像:`rocq/theories/Mirror.v`(`K / Interval / Ev / AState / 紅邊 / µ /
+> Rule / Policy / Menu / apply / applicable / 狀態枚舉`)。
+
+| # | 決策 | 理由 | 對帳 |
+|---|---|---|---|
+| D1 | `u32 → nat`;半開區間 `Interval { istart; iend }` 原樣 | 座標無負;半開語義(`overlaps` = `a.start < b.end ∧ b.start < a.end`)不變 | `i_overlap_sym` 已證;kernel 以 `(0,4)/(1,3)/(2,5)` 樣本對帳 |
+| D2 | `AState.log` 剔除 | Rust 註明「不參與相等性」,診斷用途 | —(唯一不鏡像欄位,已申明) |
+| D3 | `µ = (|E_red|, 0)` | §6.3 `|Err_rustc|` 為 oracle 範疇,記 0(判定權不轉移);不可在證明中造模型 | `measure canon = (2, 0)` 一致 |
+| D4 | 顯示標簽/`label`/`format` 不入鏡像 | 純診斷 | — |
+| D5 | id = 位置索引;Rust `AState::new` 自補 | 鏡像中事件由 `build_evs` 依列表序賦 id | 樣本 id 0..3 兩邊一致 |
+| D6 | 枚舉:鏡像用列表順序,Rust 用 `BTreeSet` 排序去重 | 只比計數,不比排序產生的具體順序 | `count_states n m = (m(m+1))^n` 對 Rust 計數全對(見 §三) |
+
+**完整對帳矩陣**(`tools/rocq_reconcile.py` 生成 `reconcile_gen.v`,kernel 以
+`vm_compute` 複驗):
+
+| 關鍵 | 結果 | 關鍵 | 結果 |
+|---|---|---|---|
+| count(1,3) | 12 | appli(ct,g) | 1 |
+| count(2,3) | 144 | appli(ct,r) | 1 |
+| count(2,4) | 400 | appli(naive,r) | 22 |
+| count(3,3) | 1728 | r1_red / r1_iv | 1 / (0,2) |
+| count(3,4) | 8000 | r2_storage | [0,0,2,1] |
+| red_edges | [(0,1);(0,2)] | r3_iv | (2,5,0,4) |
+| measure | (2,0) | r4_red / r4_runtime | 1 / [(1,2);(0,1)] |
+| nf | false | — | — |
+
+> 對帳中修的一處真實分歧:Rust `R4Runtime` 以 `push` 尾插 `runtime`,
+> 鏡像初版誤為頭插(`::`),kernel 以 `r4_runtime=[(1,2);(0,1)]` 抓出並修正。
+> **這正是三層自証的價值:互相獨立實作,差異即暴露。**
+
+---
+
+## 三、建置/驗證命令
+
+```sh
+cd rocq && make            # Mirror.v + AbstractArs.v → kernel 檢查
+make reconcile             # Rust 實例 ↔ Rocq 鏡像差分(需 cargo;生成 reconcile_gen.v 並複驗)
+```
+
+CI(`.github/workflows/ci.yml` → job `rocq`):apt 裝 coq + mathcomp →
+`make -C rocq` → `make -C rocq reconcile`。
+
+---
+
+## 四、誠實申報
+
+1. `Mirror.v` 曾含「`count_states_formula`(狀態數 = (m(m+1))^n)」定理草稿,
+   未能在截止前完成證明 → **已移除**(非假裝);現狀以對帳矩陣的 5 個樣本點
+   支撐該公式,數學證明留待 Phase 2(或由 `product`/`repeat` 結構歸納接出)。
+2. R1 是「抽象」定理,其 `sn` 前提已由 R2 對接到鏡像的具體菜單
+   (`R2_sn_step_ct`);`wcr` 前提仍未對接 —— 這是 Phase 3(R3)的任務。
+   在此之前不宣稱「任意狀態的合流」(僅有 4×6 窮舉證人)。
+3. 環境:沙箱快照不保留 `~/.rustup` 與 `/usr/local` 下的工具;
+   `scripts/setup_dev.sh` 一鍵重建(apt 需 sudo;Rust 工具鏈重裝約 10 秒)。
+4. `rocq-of-rust` 路線未採用(理由見 ROCQ-PLAN §4.2);若後續需要「實作層」
+   驗證(如 `rep::apply` 無 panic),可作 Phase 6 選配。
