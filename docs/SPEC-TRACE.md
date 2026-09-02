@@ -21,7 +21,7 @@
 `tools/rocq_reconcile.py`(Rust 實例 ↔ Rocq 計算,kernel 複驗 19 樣本點;
 已抓出並修正 R4Runtime 尾插/頭插分歧)+ CI job `rocq`。
 
-## 〇、測試全量清單(51 具名測試)
+## 〇、測試全量清單(53 具名測試)
 
 **CL0 載體 — 九律 + 編輯單體 + 定理 + 語義面(31,`tests/laws.rs`)**
 
@@ -155,7 +155,7 @@
 ## 四、防線(CI,`.github/workflows/ci.yml`)
 
 `push main / PR` → `cargo fmt --all --check` → `cargo clippy --all-targets -- -D warnings`
-→ `cargo test --all`(上表 **51** 具名測試即驗收合同)→ `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
+→ `cargo test --all`(上表 **53** 具名測試即驗收合同)→ `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
 → **coverage gate**(核心 ≥90%,ast ≥75% 豁免,`tools/cov_gate.py`)
 → **bench gate**(`hotpaths` ±25%,`tools/bench_gate.py`)。
 

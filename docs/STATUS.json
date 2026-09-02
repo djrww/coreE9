@@ -1,6 +1,6 @@
 {
   "schema": "cl0r0-status/v1",
-  "generated_at_utc": "2026-09-02T22:47:44Z",
+  "generated_at_utc": "2026-09-02T23:22:43Z",
   "note": "由 tools/gen_status.py 產生,請勿手改。CI 每次重新產生後由 tools/docs_check.py 稽核文件;本地重生成:python3 tools/gen_status.py",
   "toolchain": {
     "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
@@ -8,9 +8,9 @@
   },
   "tests": {
     "unit": 17,
-    "integration": 34,
+    "integration": 36,
     "nightly": 4,
-    "total": 51,
+    "total": 53,
     "note": "total = unit + integration = CI 驗收合同(`cargo test --all`),不含 nightly(#[ignore],由 .github/workflows/nightly.yml 執行)"
   },
   "coverage": {
@@ -51,8 +51,8 @@
     },
     "rep.rs": {
       "lf": 245,
-      "lh": 222,
-      "ratio": 0.9061
+      "lh": 240,
+      "ratio": 0.9796
     },
     "shrink.rs": {
       "lf": 77,

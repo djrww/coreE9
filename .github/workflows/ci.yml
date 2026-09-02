@@ -12,6 +12,13 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # ★ 2026-09-03:toolchain 由 @stable 鎖成 1.98.0。
+  # 原因(實測):coverage gate 的數字**不跨 LLVM 版本可移植** —— 同一份碼,
+  # 本機(rustc 1.98.0)量到 edit.rs 94/95、rep.rs 222/245,而 runner 上
+  # `@stable`(當時已是 1.99.x)量到 edit.rs 86/97、rep.rs 217/245 ——
+  # **連分母都不一樣**(95 vs 97),是 LLVM 產出的行表不同,不是真的覆蓋率債。
+  # 這種「本地綠、CI 紅」的門檻毫無判別力,故鎖版本讓兩邊可比。
+  # 代價:不會再主動抓到新 rustc 的破壞 ⇒ 升版改為**可審查的刻意動作**。
 
 jobs:
   verify:
@@ -21,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install stable toolchain (rustfmt, clippy)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: rustfmt, clippy
 
@@ -55,30 +62,42 @@ jobs:
           - label: "coq 8.20"
             id: "coq-8.20"
             image: "coqorg/coq:8.20"
+            coqc: "coqc"
           - label: "rocq 9.2"
             id: "rocq-9.2"
             image: "rocq/rocq-prover:9.2"
+            coqc: "rocq compile"
     steps:
       - uses: actions/checkout@v4
 
-      # 為什麼不用 coq-community/docker-coq-action(2026-09-03 實測修正):
-      # 它只認 coqorg/coq 這個 repo,而 Docker Hub 上該 repo **最高只有 8.20,
-      # 沒有任何 9.x 標籤**;Rocq 9 換到 `rocq/rocq-prover`(9.0/9.1/9.2/9.3)。
-      # 本形式化只用標準庫、不建 opam 套件,action 那層 opam pin/uninstall 機制
-      # 完全用不到 —— 留著只是多一個間接層。故改成直接 docker run,兩格同一套
-      # 指令,行為可在任何有 docker 的機器上一字不改複現。
+      # ── 2026-09-03 實測修正(三處,全部由真實 runner 的紅燈抓出)────────
+      # (a) 映像 repo 不同:coqorg/coq 最高只到 8.20、**沒有 9.x 標籤**;
+      #     Rocq 9 在 rocq/rocq-prover。故不用 docker-coq-action(它只認前者)。
+      # (b) 二進位名不同:Rocq 9 沒有 `coqc`,改成 `rocq compile`(子命令)。
+      #     (本機 docker 實測:`rocq --version` → The Rocq Prover, version 9.2)
+      # (c) 權限:runner 的 uid(1001)≠ 映像內 coq/rocq 使用者的 uid(1000),
+      #     直接掛載 $PWD 會 `Mirror.glob: Permission denied`。
+      #     解法:唯讀掛載,複製到容器內可寫處(/tmp)再建。
+      #
+      # 另:`From Coq Require Import` 在 Rocq 9 仍可用,只給一條 deprecation
+      # warning(`From Coq` → `From Stdlib`)。不改寫是因為 Coq 8.20 沒有
+      # `Stdlib`,改了那格就紅。
       - name: Build theorem library in ${{ matrix.image }}
         run: |
           set -euo pipefail
-          docker run --rm -v "$PWD:/src" -w /src "${{ matrix.image }}" bash -lc '
+          docker run --rm -v "$PWD:/src:ro" -w /tmp "${{ matrix.image }}" bash -lc '
             set -e
+            cp -a /src /tmp/work && cd /tmp/work
             echo "== toolchain =="
-            coqc --version
+            ${{ matrix.coqc }} --version
             ocamlc -version
             echo "== build =="
-            make -C rocq
+            # 先 clean —— 否則 `cp -a` 會把 .vo 連 mtime 一起帶進來,make 判定
+            # 為最新而什麼都不編,下面的「.vo 存在」檢查就變成假綠。
+            make -C rocq clean
+            make -C rocq COQC="${{ matrix.coqc }}"
             echo "== guards =="
-            # 斷言 1:建置真的產出了物件檔(防 make 靜默空轉 / 依賴沒接上)
+            # 斷言 1:五個 .vo 必須真的存在
             for f in Mirror WCRUtil AbstractArs ConcreteSN ConcreteWCR; do
               test -f "rocq/theories/$f.vo" || { echo "MISSING $f.vo"; exit 1; }
             done
@@ -113,7 +132,7 @@ jobs:
           sudo apt-get install -y coq
 
       - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
 
       - name: Reconcile(Rust 實例 ↔ Rocq 鏡像)
         run: make -C rocq reconcile
@@ -125,7 +144,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install stable toolchain + llvm tools
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: llvm-tools-preview
 
@@ -153,7 +172,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -187,7 +206,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install stable toolchain + llvm tools
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: llvm-tools-preview
 

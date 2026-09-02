@@ -272,7 +272,19 @@ CI(`.github/workflows/ci.yml` → job `rocq`):apt 裝 coq + mathcomp →
    `scripts/setup_dev.sh` 一鍵重建(apt 需 sudo;Rust 工具鏈重裝約 10 秒)。
 4. `rocq-of-rust` 路線未採用(理由見 ROCQ-PLAN §4.2);若後續需要「實作層」
    驗證(如 `rep::apply` 無 panic),可作 Phase 6 選配。
-5. **本輪如實修正兩處文件口徑**:(a)「46 具名測試」→ 實跑 `cargo test --all` = 51
+5. **本輪如實修正兩處文件口徑**:(a)「46 具名測試」→ **2026-09-03 真機實測:Rocq 9.2 全綠(`p4.1` 分支 + 真 docker)。**
+
+* 二進位改名:9.x 沒有 `coqc`,改用 `rocq compile`(子命令;`rocq c` 亦可)。
+* `rocq --version` → `The Rocq Prover, version 9.2`(OCaml 4.14.2)。
+* **`From Coq Require Import` 在 9.2 仍可用**,只給 deprecation warning
+  (`"From Coq" has been replaced by "From Stdlib"`,`deprecated-since-9.0`)。
+  五個檔 0 error 全數通過。刻意**不**改寫成 `From Stdlib`:Coq 8.20 無此
+  命名空間,改了 8.20 那格就紅 —— 這是「同時支援兩個版本」的直接代價。
+* 映像 repo 也不同:`coqorg/coq` 最高只到 8.20,Rocq 9 在 `rocq/rocq-prover`
+  (9.0/9.1/9.2/9.3)。故 CI 不用 `docker-coq-action`(它只認前者),改為直接
+  `docker run`,兩個映像共用同一段指令。
+
+實跑 `cargo test --all` = 53
    (15 單元 + 32 集成;本輪新增 L9b′ 後為 32);(b) `docs/BENCH.md`/`bench/BASELINE.json`
    所依託的 bench gate 曾在 CI 與本地**同時紅**(原因非代碼回歸:基線單機單次採樣
    + µs 級指標以 median 判定)。2026-09-02 已修:`tools/bench_gate.py` 改採

@@ -11,6 +11,7 @@ use cl0r0::gen::{gen_edit, gen_garbage, gen_half_file, gen_legal, Rng};
 use cl0r0::parse::{parse, Kind};
 use cl0r0::rep::{self, AState, Ev, Menu, Policy, Rule, K};
 use cl0r0::span::Span;
+use std::collections::BTreeSet;
 
 // ===========================================================================
 // L1 無損回環:unparse(parse(s)) ≡ s(逐字節)
@@ -1561,6 +1562,269 @@ fn test_law_semantic_extract_breadth() {
         let _ = facts.bindings.len();
         for track in [Track::Lexical, Track::Nll, Track::Referent] {
             let _ = red_edges(&facts, track);
+        }
+    }
+}
+
+// ===========================================================================
+// §4.2 R1「紅邊互斥」—— Guarded 版 WCR 缺的那塊
+// ===========================================================================
+
+/// 把一條 CT 規則對應到它作用的事件 id(CT 菜單只發 `R1Shorten`)。
+fn ct_target(r: Rule) -> Option<(u32, u32)> {
+    match r {
+        Rule::R1Shorten(i, c) => Some((i, c)),
+        _ => None,
+    }
+}
+
+/// 紅邊集合(`uniq_ids` 下 `red_edges()` 無重複,可直接當集合用)。
+fn red_set(s: &AState) -> BTreeSet<(u32, u32)> {
+    s.red_edges().into_iter().collect()
+}
+
+/// **R1 紅邊互斥**:Guarded 峰 `(r_a, r_b)`(異 id)的兩條補步**仍是 Guarded 步**。
+///
+/// 這是 `R3_ct_wcr`(Guarded 版 WCR)唯一欠缺的引理,也是 `R4_ct_confluent`
+/// 的最後一塊拼圖(`newman` 與 `R2_sn_step_ct` 皆已證)。
+///
+/// 論證(本測試把每一條都變成可執行的檢查):
+///   1. `r_a` 只動 `i_a` ⇒ 只可能移除涉及 `i_a` 的紅邊(對 `r_b` 同理);
+///   2. 兩者的移除集合交集只可能是邊 `(i_a, i_b)`;
+///   3. 而「`r_a` 移除它」⇒ `istart i_a < istart i_b`,「`r_b` 移除它」⇒
+///      反向嚴格不等式 —— **不能同時成立** ⇒ 交集為空;
+///   4. 兩條規則皆 Guarded ⇒ 各移除 ≥1 條 ⇒ `|E_red|` 嚴格下降
+///      ⇒ 兩條補步都是 Guarded 步 ⇒ 菱形可回合。
+///
+/// 宇宙刻意**帶 runtime 標記**:那是 Guarded 與 Raw 分歧的地方(見 §4.1),
+/// 也是唯一有鑑別力的測試場。
+#[test]
+fn test_r1_red_edge_exclusion_and_guarded_join() {
+    let base = rep::enumerate_states(3, 4);
+    assert_eq!(base.len(), 8_000, "3 事件 × 座標 0..=4 的宇宙規模");
+
+    // 3 個事件 ⇒ 3 條候選邊;枚舉 ∅ 與所有單邊標記
+    let ids: Vec<u32> = base[0].evs.iter().map(|e| e.id).collect();
+    let mut edge_sets: Vec<Vec<(u32, u32)>> = vec![vec![]];
+    for i in 0..ids.len() {
+        for j in (i + 1)..ids.len() {
+            edge_sets.push(vec![(ids[i], ids[j])]);
+        }
+    }
+
+    let (mut peaks0, mut peaks1) = (0u64, 0u64); // 依 |runtime| 分層
+    let (mut same_id, mut overlap_cases) = (0u64, 0u64);
+    let mut bad: Vec<String> = Vec::new();
+
+    for st in &base {
+        for rt in &edge_sets {
+            let mut u = st.clone();
+            u.runtime = rt.clone();
+            let layer = if rt.is_empty() {
+                &mut peaks0
+            } else {
+                &mut peaks1
+            };
+
+            let g = Menu::CommutativeTrim.applicable(&u, Policy::Guarded);
+            for x in 0..g.len() {
+                for y in (x + 1)..g.len() {
+                    let (Some((ia, _)), Some((ib, _))) = (ct_target(g[x]), ct_target(g[y])) else {
+                        continue;
+                    };
+                    if ia == ib {
+                        // uniq_ids 下 CT 對同一事件只發一條規則,故此分支應為空
+                        same_id += 1;
+                        continue;
+                    }
+                    *layer += 1;
+
+                    let (Some(sa), Some(sb)) = (rep::apply(&u, g[x]), rep::apply(&u, g[y])) else {
+                        continue;
+                    };
+                    let eu = red_set(&u);
+                    let ra_rm: BTreeSet<(u32, u32)> =
+                        eu.difference(&red_set(&sa)).copied().collect();
+                    let rb_rm: BTreeSet<(u32, u32)> =
+                        eu.difference(&red_set(&sb)).copied().collect();
+
+                    // (4) Guarded ⇒ 各移除 ≥1 條
+                    if ra_rm.is_empty() || rb_rm.is_empty() {
+                        bad.push(format!("移除集合為空 rt={rt:?} evs={:?}", u.evs));
+                    }
+                    // (1) 只動自己那條
+                    for e in &ra_rm {
+                        if e.0 != ia && e.1 != ia {
+                            bad.push(format!("r_a 移除不涉及 i_a 的邊 {e:?}"));
+                        }
+                    }
+                    for e in &rb_rm {
+                        if e.0 != ib && e.1 != ib {
+                            bad.push(format!("r_b 移除不涉及 i_b 的邊 {e:?}"));
+                        }
+                    }
+                    // (2)(3) 交集最多只能是 (ia,ib);實測應為空
+                    let edge_ab = (ia.min(ib), ia.max(ib));
+                    for e in ra_rm.intersection(&rb_rm) {
+                        if *e != edge_ab {
+                            bad.push(format!("移除集合交集出現非 (ia,ib) 的邊 {e:?}"));
+                        } else {
+                            bad.push(format!(
+                                "邊 (ia,ib)={edge_ab:?} 同時被兩條規則移除 ⇒ 互斥論證破了"
+                            ));
+                        }
+                    }
+                    if ra_rm.contains(&edge_ab) {
+                        overlap_cases += 1; // 有趣的案例數(證明檢查非空轉)
+                    }
+
+                    // 結論:兩條補步 sa--r_b-->c1、sb--r_a-->c2 是否仍為 Guarded
+                    let (Some(c1), Some(c2)) = (rep::apply(&sa, g[y]), rep::apply(&sb, g[x]))
+                    else {
+                        bad.push("補步適用失敗".into());
+                        continue;
+                    };
+                    if red_set(&c1) != red_set(&c2) {
+                        bad.push("兩條補步未達同一狀態".into());
+                    }
+                    let ec = c1.red_edges().len();
+                    if !(ec < sa.red_edges().len()) || !(ec < sb.red_edges().len()) {
+                        bad.push(format!(
+                            "補步後 |E_red| 未嚴格下降:|E(c)|={ec} |E(sa)|={} |E(sb)|={}",
+                            sa.red_edges().len(),
+                            sb.red_edges().len()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // 分層計數:|runtime|=2 時(3 事件只剩 1 條紅邊)已無 Guarded 峰,故只列兩層
+    assert_eq!((peaks0, peaks1), (1_326, 1_590), "依 |runtime| 分層的峰數");
+    assert_eq!(same_id, 0, "uniq_ids 下 CT 對同一事件不會發兩條規則");
+    assert_eq!(
+        overlap_cases, 570,
+        "邊 (ia,ib) 被 r_a 移除的次數 —— 非零代表互斥論證真的被檢驗到(非空轉)"
+    );
+    assert!(
+        bad.is_empty(),
+        "紅邊互斥 / Guarded 補步 有違反(前 5 條):\n{}",
+        bad.iter()
+            .take(5)
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+// ===========================================================================
+// §4.3 rep 公開 API 的契約(此前完全沒有測試碰過)
+// ===========================================================================
+
+/// 補上 `rep` 模組從未被任何測試走過的公開面:`K::label` / `is_normal_form` /
+/// `step` / `normalize` / `l8_check`,以及 `apply` 的各個 `None` 分支。
+///
+/// 動機不只是一個覆蓋率數字:2026-09-03 CI 實測發現 `rep.rs` 只有 90.6%,
+/// 離 90% 門檻僅 0.6 個百分點 —— 而門檻本身還會隨 LLVM 版本漂移(見
+/// `.github/workflows/ci.yml` 的 toolchain 鎖版註解)。這些都是**真實的 API
+/// 債**,不是為了湊數字的覆蓋。
+#[test]
+fn test_rep_public_api_contracts() {
+    // ── K::label ──
+    assert_eq!(K::Mut.label(), "mut");
+    assert_eq!(K::Sh.label(), "sh");
+
+    let evs = vec![
+        Ev {
+            id: 0,
+            storage: 0,
+            kind: K::Mut,
+            it: Interval { start: 0, end: 10 },
+        },
+        Ev {
+            id: 1,
+            storage: 0,
+            kind: K::Sh,
+            it: Interval { start: 2, end: 8 },
+        },
+    ];
+    let s = AState::new(evs);
+    assert!(!s.red_edges().is_empty(), "前提:此狀態有紅邊");
+    assert!(!s.is_normal_form(), "有紅邊 ⇒ 非正規形");
+
+    // ── step:有適用規則時回傳一步,且 μ 嚴格遞減(L8)──
+    let (s2, _r) = rep::step(&s, Menu::CommutativeTrim, Policy::Guarded).expect("應有適用規則");
+    assert!(
+        AState::strictly_decreases(s2.measure(), s.measure()),
+        "L8:Guarded 每一步都必須嚴格遞減 μ"
+    );
+
+    // ── normalize:到達正規形,且冪等 ──
+    let (nf, steps) = rep::normalize(s.clone(), Menu::CommutativeTrim, Policy::Guarded);
+    assert!(steps >= 1, "有紅邊的狀態至少要規約一步");
+    assert!(nf.is_normal_form(), "正規化之後應無紅邊");
+    let (nf2, steps2) = rep::normalize(nf.clone(), Menu::CommutativeTrim, Policy::Guarded);
+    assert_eq!(steps2, 0, "正規形上不再有任何步驟(冪等)");
+    assert_eq!(nf.red_edges(), nf2.red_edges());
+
+    // ── step 在正規形上 ⇒ None ──
+    assert!(rep::step(&nf, Menu::CommutativeTrim, Policy::Guarded).is_none());
+
+    // ── apply 的合法施用 ──
+    assert!(
+        rep::apply(&s, Rule::R2Split(0, 5)).is_some(),
+        "切點在區間內"
+    );
+    assert!(rep::apply(&s, Rule::R3Swap(0, 1)).is_some(), "兩個不同事件");
+    assert!(
+        rep::apply(&s, Rule::R4Runtime(0, 1)).is_some(),
+        "(0,1) 確是紅邊"
+    );
+
+    // ── apply 的各個 None 分支 ──
+    assert!(
+        rep::apply(&s, Rule::R1Shorten(0, 0)).is_none(),
+        "cut ≤ start"
+    );
+    assert!(
+        rep::apply(&s, Rule::R1Shorten(0, 99)).is_none(),
+        "cut ≥ end"
+    );
+    assert!(
+        rep::apply(&s, Rule::R1Shorten(77, 5)).is_none(),
+        "id 不存在"
+    );
+    assert!(
+        rep::apply(&s, Rule::R2Split(0, 99)).is_none(),
+        "切點不在區間內"
+    );
+    assert!(
+        rep::apply(&s, Rule::R3Swap(0, 0)).is_none(),
+        "同一事件不可換"
+    );
+    assert!(rep::apply(&s, Rule::R3Swap(0, 77)).is_none(), "id 不存在");
+    assert!(
+        rep::apply(&s, Rule::R4Runtime(0, 0)).is_none(),
+        "非紅邊不可標記為 runtime"
+    );
+
+    // ── l8_check:Guarded 菜單上不應有違反;Raw 若違反,該規則必被 Guarded 濾掉 ──
+    for st in rep::enumerate_states(3, 3) {
+        assert!(
+            rep::l8_check(&st, Menu::CommutativeTrim, Policy::Guarded).is_none(),
+            "Guarded 菜單的每條規則都必須嚴格遞減 μ({:?})",
+            st.evs
+        );
+        if let Some((_s0, _s2, r)) = rep::l8_check(&st, Menu::CommutativeTrim, Policy::Raw) {
+            // Raw 不做側條件篩選,故可能出現不遞減的規則;但那些規則必然
+            // 不在 Guarded 菜單中 —— 這正是 §4.1 反例所刻畫的差異。
+            assert!(
+                !Menu::CommutativeTrim
+                    .applicable(&st, Policy::Guarded)
+                    .contains(&r),
+                "Guarded 不該保留一條不嚴格遞減的規則 {r:?}"
+            );
         }
     }
 }

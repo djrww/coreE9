@@ -143,6 +143,38 @@ CI 裡一個 20 分鐘的 job 會把「每次提交都跑形式化」變成人�
 > **首次真跑請看兩格的 job log**;若 9.2 格斷在命名空間,那就是本項要抓的東西
 > —— 斷在 PR 裡正是設計目的。
 
+**2026-09-03 實測(真實 runner + 真 docker,推翻上面三處猜測)**
+
+在 `p4.1` 分支上真跑 CI,三格全紅;每一格都打在上一段的猜測之外:
+
+| 失敗 | 實際原因 | 修正 |
+|---|---|---|
+| `rocq 9.2` | **`coqc` 不存在** —— Rocq 9 的二進位改名 `rocq`,且 `coqc` 子命令化為 `rocq compile` | 矩陣加 `coqc:` 欄位(8.20 → `coqc`,9.2 → `rocq compile`),`make -C rocq COQC=…` 覆寫 |
+| `coq 8.20` | **`Mirror.glob: Permission denied`** —— runner 的 uid 1001 ≠ 映像內 `coq` 使用者的 uid 1000,直接掛載 `$PWD` 無寫入權 | 改為唯讀掛載 + `cp -a /src /tmp/work`,在容器內可寫處建置 |
+| `coverage` | `edit.rs` 88.7%、`rep.rs` 88.6%(本地卻是 99.0% / 90.6%) | 見下方「覆蓋率 gate 不跨 LLVM 版本可移植」 |
+
+> 原本預期 9.2 會斷在**命名空間**,結果 `From Coq Require Import` 在 Rocq 9.2
+> 完全可用(只給一條 `"From Coq" has been replaced by "From Stdlib"` 的
+> deprecation warning)。本機 docker 實測:五個檔在 9.2 上 **0 error** 全數通過。
+> 不改寫成 `From Stdlib`,因為 Coq 8.20 沒有 `Stdlib`,改了那格反而紅。
+
+**附帶抓到的假綠**:`cp -a` 會把 `.vo` 連 mtime 一起複製進容器,`make` 判定為
+最新而印 `Nothing to be done`,**一行都沒編譯** —— 而「檢查 `.vo` 存在」的斷言
+照樣通過。故 CI 在建置前先 `make -C rocq clean`。
+
+**覆蓋率 gate 不跨 LLVM 版本可移植(新發現,已處理)**
+
+同一份碼,本機(rustc 1.98.0)量到 `edit.rs` 94/95、`rep.rs` 222/245;
+runner 上 `@stable`(當時 1.99.x)量到 `edit.rs` 86/97、`rep.rs` 217/245 ——
+**連分母都不一樣**(95 vs 97),是 LLVM 產出的行表不同,不是真的覆蓋率債。
+這種「本地綠、CI 紅」的門檻沒有判別力。處理方式二選一,兩個都做了:
+
+1. **鎖 toolchain**:`@stable` → `@1.98.0`(ci.yml 5 處 + nightly.yml 1 處),
+   讓本地與 CI 可比。代價:不再主動抓新 rustc 的破壞 ⇒ 升版改為刻意動作。
+2. **拉大 margin**:補上 `rep` 公開 API 的契約測試(`K::label` /
+   `is_normal_form` / `step` / `normalize` / `l8_check` / `apply` 的 None 分支,
+   此前完全沒有測試碰過)⇒ `rep.rs` 90.6% → **98.0%**(margin 0.6 → 8 個百分點)。
+
 ---
 
 ## #5 門檻的「可信度」問題:門太寬或太窄,都會讓全綠失去意義
