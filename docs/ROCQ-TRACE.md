@@ -54,6 +54,21 @@ Acc 反向歸納恰給「∀a′, r a a′ → P a′」的推進 IH)。
 | 4×6(+過濾,=CI)| 623,616 | 635,424 | 0 違反 | 635,424/635,424 | 0 偏離 | 0 |
 | 4×6(**無過濾**)| 3,111,696 | 2,443,506 | 0 違反 | 2,443,506/2,443,506 | 0 偏離 | 0 |
 
+> **2026-09-03(N5)**:上表過去只有人手重跑的 `examples/r3_probe` 輸出作依據。
+> 盤點後:其中 P1(start 不變)/ P2(可回合)/ 多正規形 = 0 三欄,已由
+> `test_law_L9_scaled_space_joinable`(M5 起跑 4×6 = 623,616 狀態)與
+> `test_law_L9b_parallel_moves_exact_swap` **在 CI 內守住**;P3(Guarded≡Raw)
+> 該測試只比 `.len()`、未比集合,已由 `tests/r3_nightly.rs` 補上**集合相等**。
+>
+> 但真正沒有保護的是 `examples/r3_wf` 的**第二節(倒掛宇宙)**:
+> `rep::enumerate_states` 的構造排除倒掛區間(`end > start`),所以任何以它為
+> 宇宙的測試,對「R3 是否需要 `wf_state` 前提」都是**套套邏輯** —— 這正是
+> `r3_wf` 第一節自己印出的警告。決定性樣本是自行枚舉、允許倒掛的宇宙,實測
+> (3 事件 × 座標 0..=3):**32,768 狀態 / 24,768 個含倒掛 / 387 peers /
+> 非精確交換 0** ⇒ 即使允許倒掛也全數精確交換。這個反直覺結論撐著本檔 R3
+> 「wf 前提可能不必要」的路線,現由 `tests/r3_nightly.rs` 的 `#[ignore]`
+> 具名測試以 `assert_eq!` 釘住,由 `.github/workflows/nightly.yml` 每日執行。
+
 推論(寫進 Phase 3 的定理陳述):
 * `ct_join_exact`:兩步不同後繼時,`apply (apply s ra) rb = apply (apply s rb) ra`(等式級,非 merely joinable);
 * `ct_guard_redundant`:CT 上 `applicable s CT Guarded = applicable s CT Raw` ⇒ µ 遞減是定理而非假設;

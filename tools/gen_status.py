@@ -56,14 +56,23 @@ def die(msg, *detail):
 
 # ---------------------------------------------------------------- 測試計數
 def collect_tests():
-    """分別量測單元測試與集成測試的**具名測試數**。
+    """分別量測單元 / 集成 / 夜間測試的**具名測試數**。
 
-    刻意分開跑兩個 target:合併跑 `cargo test --all -- --list` 時,各 test
-    binary 的列表會串在同一個 stdout 裡,只能靠 cargo 自己的 stderr 分節,
-    而那不是穩定介面。分開跑則每個數字都有確定的來源。
+    刻意分開跑各 target:合併跑 `cargo test --all -- --list` 時,各 test binary
+    的列表會串在同一個 stdout 裡,只能靠 cargo 自己的 stderr 分節,而那不是
+    穩定介面。分開跑則每個數字都有確定的來源。
+
+    ★ `total` 是 **CI 驗收合同的規模** = unit + integration,**不含** nightly。
+      夜間測試(`tests/r3_nightly.rs`)全部 `#[ignore]`,由 nightly workflow
+      執行;把它們算進 headline 會讓「50 具名測試即驗收合同」這句話失真。
+      故另立 `nightly` 欄位,並在 note 裡寫明。
     """
     out = {}
-    for key, extra in (("unit", ["--lib"]), ("integration", ["--test", "laws"])):
+    for key, extra in (
+        ("unit", ["--lib"]),
+        ("integration", ["--test", "laws"]),
+        ("nightly", ["--test", "r3_nightly"]),
+    ):
         rc, txt = run(["cargo", "test", *extra, "--", "--list"])
         if rc != 0:
             die(f"`cargo test {' '.join(extra)} -- --list` 失敗", txt[-800:])
@@ -72,6 +81,10 @@ def collect_tests():
             die(f"`cargo test {' '.join(extra)}` 量到 0 條測試 —— 不合理,拒絕寫出")
         out[key] = n
     out["total"] = out["unit"] + out["integration"]
+    out["note"] = (
+        "total = unit + integration = CI 驗收合同(`cargo test --all`),"
+        "不含 nightly(#[ignore],由 .github/workflows/nightly.yml 執行)"
+    )
     return out
 
 

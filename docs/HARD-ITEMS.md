@@ -122,6 +122,27 @@ CI 裡一個 20 分鐘的 job 會把「每次提交都跑形式化」變成人�
   退出碼 0,並把完整日誌(含版本行)收進 `docs/logs/<date>/`;
 - PR 附帶 CI 截圖/日誌連結,證明 9.2 與 8.20 兩格都綠。
 
+> ✅ / ⚠️ **2026-09-03 部分落地(N4)**,並修正一處既有事實:
+>
+> **已做**:CI 拆成 `rocq`(docker-coq-action + 8.20/9.2 兩格矩陣,`fail-fast: false`)
+> 與 `rocq-reconcile`(apt coq,單版本)兩個 job;每格上傳 `coqc --version` 版本行
+> 為 artifact。拆開的理由:對帳需要 `cargo`,容器內沒有,硬塞進去只會讓兩格都變慢;
+> 而定理庫的版本敏感度與對帳無關(對帳是兩個獨立實作的對比)。
+>
+> **修正**:本形式化**完全不用 MathComp** —— 全庫只有
+> `From Coq Require Import List Arith Bool Lia Classical Wellfounded`,
+> grep 不到任何 mathcomp / ssreflect 載入。故 CI 已不再安裝
+> `libcoq-mathcomp-ssreflect`:少一個相依就少一個跨版本更名的破口
+> (本檔原本擔心的「8.20 vs 9.2 的 MathComp 更名」對本專案不成立)。
+>
+> ⚠️ **未在本環境驗證(如實申報)**:沙箱**沒有 docker**,`docker-coq-action`
+> 這條路我無法實跑。已做的靜態檢查:無 MathComp 相依;`From Coq Require` 在
+> Rocq 9.x 仍是 `Stdlib` 的別名(會印 deprecation warning,Makefile 未把
+> warning 當錯誤);所用 lemma(`Nat.ltb_lt` / `Bool.orb_true_iff` /
+> `well_founded_lt_compat` / `NoDup` …)皆為長期穩定介面。
+> **首次真跑請看兩格的 job log**;若 9.2 格斷在命名空間,那就是本項要抓的東西
+> —— 斷在 PR 裡正是設計目的。
+
 ---
 
 ## #5 門檻的「可信度」問題:門太寬或太窄,都會讓全綠失去意義

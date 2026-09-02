@@ -1,9 +1,14 @@
 name: CI
 
 on:
+  # ★ N3(2026-09-03):原先只有 [main] ⇒ 直接 push 到 `p4` 等主題分支
+  # **完全不觸發 CI**。實測 GitHub API:受檢 HEAD `483a142` 上查無任何
+  # workflow run / check-run(total_count: 0)—— 也就是說「CI 全綠」的宣稱
+  # 從未在該 commit 上被驗證過。改用 glob 覆蓋 `p*` 主題分支。
   push:
-    branches: [main]
+    branches: [main, "p*"]
   pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,22 +40,63 @@ jobs:
       - name: rustdoc (deny warnings)
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 
+  # ── N4-a:定理庫在兩個 Coq/Rocq 版本上都必須編譯(§P3-14 #4)──────────
+  # 為什麼拆成兩個 job:版本矩陣要的是「敘述在兩個版本都成立」,而對帳
+  # (reconcile)需要 cargo —— 容器內沒有,硬塞進去只會讓矩陣兩格都變慢。
+  # 故:定理庫走容器矩陣,對帳留在單一版本(Rust ↔ Rocq 的語義一致性與
+  # coq 版本無關,它是兩個獨立實作的對比)。
   rocq:
-    name: rocq gate(Phase 0–3:mirror + WCRUtil + Newman + 對帳)
+    name: rocq theorems · coq ${{ matrix.coq_version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false          # 一格紅不要停掉另一格:要看見「哪個版本斷」
+      matrix:
+        # 本機(沙箱 apt)實測:8.20.1 + OCaml 5.3.0 全綠。
+        # 9.2 為官方 Rocq 改名後的版本(Stdlib 更名,`Coq` 仍為別名)。
+        coq_version: ["8.20", "9.2"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: coq-community/docker-coq-action@v1
+        with:
+          coq_version: ${{ matrix.coq_version }}
+          ocaml_version: "4.14-flambda"
+          before_script: |
+            startGroup "toolchain versions"
+              coqc --version
+              ocamlc -version
+              coqc --version > rocq-version.txt
+            endGroup
+          script: |
+            startGroup "build theorem library"
+              make -C rocq
+            endGroup
+
+      # artifact 存版本行:日後要複現任何一次綠,先知道它是哪個版本綠的
+      - name: Upload version line
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocq-version-${{ matrix.coq_version }}
+          path: rocq-version.txt
+          if-no-files-found: warn
+
+  rocq-reconcile:
+    name: rocq reconcile(Rust 實例 ↔ Rocq 鏡像,kernel 複驗)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rocq(Coq)+ MathComp
+      # 注意:**不裝 MathComp** —— 本形式化只用 Coq 標準庫
+      # (`From Coq Require Import List Arith Bool Lia Classical Wellfounded`),
+      # 全庫 grep 不到任何 mathcomp / ssreflect 載入,實測卸載後仍全綠。
+      # 少一個相依就少一個跨版本更名的破口(#4 關心的正是這個)。
+      - name: Install Rocq(Coq)
         run: |
           sudo apt-get update
-          sudo apt-get install -y coq libcoq-mathcomp-ssreflect
+          sudo apt-get install -y coq
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Build theorem library
-        run: make -C rocq
 
       - name: Reconcile(Rust 實例 ↔ Rocq 鏡像)
         run: make -C rocq reconcile

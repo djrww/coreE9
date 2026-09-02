@@ -37,11 +37,17 @@ cargo test  cargo llvm-cov  make -C rocq      cargo run --release
   (失敗即紅;半份真相比沒有真相更危險,見 `docs/COVERAGE.md` §三之二)。
 * 庫裡的 `docs/STATUS.json` 只是**給人看的快照**;CI 每次重新產生,不信任快照。
 
+> ★ `tests.total` = unit + integration = **CI 驗收合同**(`cargo test --all`),
+> **不含** `nightly`。`tests/r3_nightly.rs` 的三條全部 `#[ignore]`,由
+> `.github/workflows/nightly.yml` 執行;把它們算進 headline 會讓
+> 「N 具名測試即驗收合同」這句話失真,故另立欄位並在此寫明。
+
 ## 欄位
 
 | 區塊 | 來源 | 用途 |
 |---|---|---|
 | `tests.{unit,integration,total}` | `cargo test --lib -- --list` + `cargo test --test laws -- --list` | 文件裡的「N 具名測試」 |
+| `tests.nightly` | `cargo test --test r3_nightly -- --list` | 僅供查閱:**不計入 `total`**（見下）|
 | `coverage.<mod>.{lf,lh,ratio}` | lcov(**複用 `tools/cov_gate.py` 的解析器**,避免第二份解析器漂移) | `docs/COVERAGE.md` 的表格 |
 | `rocq.{files,lines,admitted,axiom,reconcile_facts}` | 掃 `rocq/theories/*.v` + `make -C rocq reconcile` | 「0 Admitted / 0 Axiom」「19 樣本點」 |
 | `universes.*` | `examples/status_probe`(如實量測,不做性質判斷) | 623,616 / 105,216 / 35,280 等 |
