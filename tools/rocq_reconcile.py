@@ -132,6 +132,12 @@ def gen(facts):
     eq("r2_storage", "match apply_rule canon (R2Split 1 2) with Some s2 => map ev_storage (st_evs s2) | None => [] end", coq_list(facts["r2_storage"]))
     m_r3 = "match apply_rule canon (R3Swap 0 2) with Some s2 => match st_evs s2 with e0 :: _ :: e2 :: _ => (istart (ev_it e0), iend (ev_it e0), istart (ev_it e2), iend (ev_it e2)) | _ => (0,0,0,0) end | None => (0,0,0,0) end"
     eq("r3_iv", m_r3, facts["r3_iv"])
+    m_step = ("match applicable canon CommutativeTrim Guarded with "
+              "r :: _ => (match apply_rule canon r with "
+              "Some s2 => length (red_edges s2) | None => 999 end) "
+              "| [] => 999 end")
+    eq("ct_step_measure", m_step, facts["ct_step_measure"])
+
     eq("r4_red", "match apply_rule canon (R4Runtime 0 1) with Some s2 => length (red_edges s2) | None => 999 end", facts["r4_red"])
     eq("r4_runtime", "match apply_rule canon (R4Runtime 0 1) with Some s2 => st_runtime s2 | None => [] end", coq_list(facts["r4_runtime"]))
 

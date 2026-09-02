@@ -58,7 +58,7 @@
 
 | # | 工作項 | 內容 | 工作量 |
 |---|---|---|---|
-| 12 | **形式化證明** | Lean/Coq/Rocq 重證核心:Newman 引理(現為測試級)、L7b 迭代淨化於切縫終止、T2 區間圖完美性;與 Rust 側對帳 | XL | **進行中(路線 A)**:`docs/ROCQ-PLAN.md`(計劃)+ `docs/ROCQ-TRACE.md`(對帳)。**Phase 0/1 ✅**:鏡像(Mirror.v,D1–D6)+ 對帳框架(19 樣本點 kernel 複驗,抓出 R4 runtime 順序分歧並修)+ 抽象 Newman(R1)+ 唯一正規形/存在性(R4)全部已證。**Phase 2(R2 具體 SN)下一步** |
+| 12 | **形式化證明** | Lean/Coq/Rocq 重證核心:Newman 引理(現為測試級)、L7b 迭代淨化於切縫終止、T2 區間圖完美性;與 Rust 側對帳 | XL | **進行中(路線 A)**:`docs/ROCQ-PLAN.md`(計劃)+ `docs/ROCQ-TRACE.md`(對帳)。**Phase 0–2 ✅**(2026-09-02):鏡像(Mirror.v,D1–D6)+ 對帳框架(19 樣本點 kernel 複驗,抓出並修正 R4 runtime 順序分歧)+ 抽象 Newman(R1/R4)+ **具體 SN(R2:CommutativeTrim × Guarded 之 step_ct 強正規化,µ=|E_red|)**。**Phase 3(R3 具體 WCR → 任意狀態合流)下一步** |
 | 13 | **定律語義化報告** | 把 fuzz 的統計型檢查升級為「生成式證明」:每輪記錄證人,匯出 `docs/REPORT.md` 機器可讀 | L | **已裁決(非 Rocq 前置)**:擱置;理由見 ROCQ-PLAN §5.1;極小版可排 Phase 5 後 |
 
 ---

@@ -12,7 +12,8 @@
 |---|---|---|
 | R1 | 抽象 Newman:`sn r -> wcr r -> confluent r`(Huet 式,構造) | ✅ 已證 |
 | R4 | `newman_unf`(唯一正規形)+ `exists_normal_form` | ✅ 已證 |
-| R2/R3/R5/R6/R7 | 具體 SN / 具體 WCR / L7b 終止 / T2 / 反例存在 | ⬜ Phase 2–6 |
+| R2 | 具體 SN:`sn step_ct`(CommutativeTrim × Guarded,µ=|E_red|)| ✅(Phase 2)|
+| R3/R5/R6/R7 | 具體 WCR / L7b 終止 / T2 / 反例存在 | ⬜ Phase 3–6 |
 
 配套:內核鏡像 `rocq/theories/Mirror.v`(D1–D6 決策)+ 對帳框架
 `tools/rocq_reconcile.py`(Rust 實例 ↔ Rocq 計算,kernel 複驗 19 樣本點;

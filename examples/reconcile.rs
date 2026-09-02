@@ -6,7 +6,7 @@
 //! 用法:cargo run --example reconcile  →  只印 `key=value` 行。
 
 use cl0r0::ast::Interval;
-use cl0r0::rep::{apply, enumerate_states, AState, Ev, Menu, Policy, Rule, K};
+use cl0r0::rep::{apply, enumerate_states, step, AState, Ev, Menu, Policy, Rule, K};
 
 fn main() {
     // ── 狀態枚舉計數(小空間)──
@@ -87,6 +87,12 @@ fn main() {
         ),
         None => println!("r3_err=1"),
     }
+    // ── Guarded 首步(step_ct 的具體實例:measure 應嚴格遞減)──
+    match step(&canon, Menu::CommutativeTrim, Policy::Guarded) {
+        Some((s2, _)) => println!("ct_step_measure={}", s2.red_edges().len()),
+        None => println!("ct_step_measure=999"),
+    }
+
     match apply(&canon, Rule::R4Runtime(0, 1)) {
         Some(s2) => {
             println!("r4_red={}", s2.red_edges().len());
