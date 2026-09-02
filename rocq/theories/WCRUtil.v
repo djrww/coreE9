@@ -137,15 +137,83 @@ Qed.
             wf_state s := forall e, In e (st_evs s) -> istart (ev_it e) <? iend (ev_it e).
           並證 CT 步保持它 —— 這需要「cut_for 的結果 > istart a」一支引理:
             cut_for_gt_start : cut_for l a = Some c -> istart (ev_it a) <? c = true
-          (證明策略已設計完成:把 Mirror 的 left-fold-min 轉寫成右折 `minopt`,
-           再證 `minopt f l = Some d -> (forall y, In y l -> P y) -> P d`,
-           其中 P := `0 <? f y`;兩邊等價用長度歸納。見下方「未證清單」。) *)
+          **已證(2026-09-03,見下方 ③)**。原計劃的「右折 minopt 改寫」實作後
+          發現**不需要**:只要把累加器 generalize 成抽象 `acc` 再對列表歸納,
+          「cbn 過度約簡 ⇒ injection 失敗」的卡點就消失 —— 病根從來不是
+          fold_left 本身,而是把具體的 `None` 留在式子裡讓 cbn 展開。
+          (見 ③ 的 fold_min_mem / cut_for_gt_start,已 kernel 驗證。) *)
 
 (** `ct_pred_trim_right_ok`(「剪 b 的右端不影響 a 對 b 的候選判定」)經檢查
     **不成立**,已從本檔移除:剪短 b 的 `iend` 會改變 `i_overlap a b` 的第二個
     合取項 `istart a <? iend b`,該項與 b 的原始 `iend` 有关,不是剪後必然保持。
     ⇒ 交換引理不能靠「候選判定逐點不變」,必須走「**恰好移除被剪者**」的形狀,
-      而那需要 `cut_for_gt_start`(未證) + 良構性不變量(未形式化)。 *)
+      而那需要 `cut_for_gt_start`(✅ 已證,見 ③) + 良構性不變量
+      (✅ 已形式化,見 ConcreteWCR.v 的 wf_state / 保持性)。 *)
+
+(* --------------------------------------------------------------------- *)
+(* ③ cut_for_gt_start —— Phase 3 第二輪遺留的唯一缺口(2026-09-03 封閉)  *)
+(*                                                                       *)
+(* 證明骨架:fold 的結果必為某個候選 b 的 istart(顯然,從 None 出發、        *)
+(* 每步只取 min);候選即過 `ct_pred a` 者 ⇒ istart a < istart b            *)
+(* (② 的 ct_pred_start_lt)⇒ istart a < c。                               *)
+(*                                                                       *)
+(* ★ 工程教訓(2026-09-02 卡點的解藥,留檔勿重蹈):                          *)
+(*   原計劃想把 fold_left-min 轉寫成右折再證 —— 不必。對 fold_left 做     *)
+(*   歸納時**先把累加器 generalize**(acc 不綁定成 None),cbn/simpl 就只會  *)
+(*   對「列表是 cons」這一層開一刀,「match None with」根本不會被展開,      *)
+(*   也就不存在 injection 無從注入的問題。這是對「左折 + 具體初值」         *)
+(*   直接丟 cbn 才會踩的坑。                                              *)
+(* --------------------------------------------------------------------- *)
+
+Section MinFold.
+
+(** 左折取 min(「None 開局、每步 Nat.min」)的結果若存在,必已出現在
+    輸入列表裡(或就是初值)—— min 每一步都只「選某個已有輸入」。
+    構造性存在(∃;同值可重複出現,不需唯一性),由 fold 形狀直接給出。
+    這一步也正是「合一/匹配」的構造性見證抽取(Martelli–Montanari 式):
+    ⇒ 不需排中律,見證由歸納直接產出。 *)
+
+Lemma fold_min_mem : forall (g : Ev -> nat) (l : list Ev) acc c,
+  fold_left (fun acc0 b => match acc0 with
+                           | None => Some (g b)
+                           | Some c0 => Some (Nat.min c0 (g b))
+                           end) l acc = Some c ->
+  (exists b, In b l /\ g b = c) \/ acc = Some c.
+Proof.
+  intros g l. induction l as [|x l IH]; intros acc c H.
+  - right. exact H.
+  - destruct acc as [d|]; simpl in H.
+    + (* acc = Some d:fold 右移一步,初值變 Some (min d (g x)) *)
+      destruct (IH _ _ H) as [[b [Hin Hc]] | Hmin].
+      * left. exists b. split; [right; exact Hin | exact Hc].
+      * injection Hmin as Hmin.              (* Nat.min d (g x) = c *)
+        destruct (Nat.min_dec d (g x)) as [Hd|Hx].
+        -- right. f_equal. rewrite Hd in Hmin. exact Hmin.   (* c = d = 舊初值 *)
+        -- left. exists x. split; [now left | rewrite Hx in Hmin; exact Hmin].
+    + (* acc = None:右移一步,初值變 Some (g x) *)
+      destruct (IH _ _ H) as [[b [Hin Hc]] | Hgx].
+      * left. exists b. split; [right; exact Hin | exact Hc].
+      * injection Hgx as Hgx.
+        left. exists x. split; [now left | exact Hgx].
+Qed.
+
+End MinFold.
+
+(** 主引理:cut_for 的輸出嚴格大於觀察者自身的 istart。
+    (這是 wf 不變量「剪到 cut 仍保持 istart < iend」的引擎。) *)
+Lemma cut_for_gt_start : forall l a c,
+  cut_for l a = Some c -> (istart (ev_it a) <? c) = true.
+Proof.
+  intros l a c H.
+  rewrite cut_for_is_filter in H.
+  destruct (fold_min_mem (fun b => istart (ev_it b)) _ _ _ H)
+    as [[b [Hin Hc]] | Hcontra]; [| discriminate].
+  apply Nat.ltb_lt.
+  rewrite <- Hc.
+  apply ct_pred_start_lt.
+  apply filter_In in Hin as [_ Hct].
+  exact Hct.
+Qed.
 
 (* --------------------------------------------------------------------- *)
 (* ④ 語義定則的計算證據(kernel 複驗;不可刪 —— 這是「捷徑為假」的證物)      *)

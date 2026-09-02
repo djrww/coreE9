@@ -1,0 +1,247 @@
+*** =====================================================================
+*** CT 菜單的 Maude 獨立實現(第三次實作;Rust = rep.rs/l9newman.rs,
+*** Rocq = Mirror.v/WCRUtil.v/ConcreteWCR.v)。
+*** 目的:對 r3_probe/r3_swap 的探針結論做**第三方**交叉驗證:
+***   P1 cut_for 的輸出 > 觀察者 istart(Coq: WCRUtil.cut_for_gt_start)
+***   P2 精確交換(等式級菱形):對菜單中任意兩條規則 r1 r2,
+***      apply(apply(S,r1),r2) == apply(apply(S,r2),r1)
+***   P3 Guarded == Raw(µ 遞減是定理不是假設;Coq 側 R2 的鏡面)
+***   P4 一步前後 istart 向量逐字不變(Coq: ConcreteWCR.ct_step_start_invariant)
+***   P5 wf(全部事件 istart < iend)在一步後保持(Coq: ct_step_preserves_wf)
+*** 誠實限定(與鏡像對齊):
+***   * 狀態只帶事件列表 —— CT 菜單只產生 R1Shorten,runtime 欄在 CT 步下
+***     恆為空(R4 規則不在 CT 菜單),故紅邊計算 rt = nil 無損一般性;
+***   * foldmin 以右折寫而 Rust 是左折 —— min 結合/交換 ⇒ 結果相同;
+***     Coq 側的精確對應已由 fold_min_mem 釘死(「結果 ∈ 輸入」一句)。
+***   * r1app 全函數化(找不到 id 時回傳原表)——本檔只對菜單出身的規則
+***     做 apply,id 必命中,故全函數化**不改變任何被檢查的性質**。
+*** =====================================================================
+
+fmod CT-XCHECK is
+  protecting NAT .
+
+  *** --- 事件種類/區間/事件(Rust: K / Interval / Ev) ---
+  sort EvKind . ops Mut Sh : -> EvKind [ctor] .
+  op kconf : EvKind EvKind -> Bool .
+  eq kconf(Mut, K:EvKind) = true .
+  eq kconf(Sh, Mut) = true .
+  eq kconf(Sh, Sh) = false .
+
+  sort Iv . op i : Nat Nat -> Iv [ctor] .
+  ops st en : Iv -> Nat .
+  eq st(i(S:Nat, E:Nat)) = S:Nat .
+  eq en(i(S:Nat, E:Nat)) = E:Nat .
+  op over : Iv Iv -> Bool .
+  eq over(i(S1:Nat, E1:Nat), i(S2:Nat, E2:Nat))
+     = (S1:Nat < E2:Nat) and (S2:Nat < E1:Nat) .
+
+  sort Ev . op ev : Nat Nat EvKind Iv -> Ev [ctor] .
+  ops eid esto : Ev -> Nat .  op ekd : Ev -> EvKind .  op eiv : Ev -> Iv .
+  eq eid(ev(I:Nat, S:Nat, K:EvKind, V:Iv)) = I:Nat .
+  eq esto(ev(I:Nat, S:Nat, K:EvKind, V:Iv)) = S:Nat .
+  eq ekd(ev(I:Nat, S:Nat, K:EvKind, V:Iv)) = K:EvKind .
+  eq eiv(ev(I:Nat, S:Nat, K:EvKind, V:Iv)) = V:Iv .
+  op trimE : Ev Nat -> Ev .
+  eq trimE(ev(I:Nat, S:Nat, K:EvKind, V:Iv), C:Nat)
+     = ev(I:Nat, S:Nat, K:EvKind, i(st(V:Iv), C:Nat)) .
+
+  *** --- 列表(全部 cons 式,不用 assoc —— 走純方程式路徑) ---
+  sort EvL .  op nil : -> EvL [ctor] .  op _;_ : Ev EvL -> EvL [ctor] .
+  sort IvL .  op inil : -> IvL [ctor] .  op _;_ : Iv IvL -> IvL [ctor] .
+  sort KIvL . op knil : -> KIvL [ctor] . op _;_ : KIvSpec KIvL -> KIvL [ctor] .
+  sort KIvSpec . op _pair_ : EvKind Iv -> KIvSpec [ctor] .
+  sort Rule . op r1 : Nat Nat -> Rule [ctor] .
+  sort RuleL . op rnil : -> RuleL [ctor] . op _;_ : Rule RuleL -> RuleL [ctor] .
+  sort NatL . op nnil : -> NatL [ctor] . op _;_ : Nat NatL -> NatL [ctor] .
+  sort EvLL . op elnil : -> EvLL [ctor] . op _;;_ : EvL EvLL -> EvLL [ctor] .
+
+  op _++_ : EvL EvL -> EvL .
+  eq nil ++ L2:EvL = L2:EvL .
+  eq (E:Ev ; L1:EvL) ++ L2:EvL = E:Ev ; (L1:EvL ++ L2:EvL) .
+  op ivapp : IvL IvL -> IvL .
+  eq ivapp(inil, L2:IvL) = L2:IvL .
+  eq ivapp(V:Iv ; L1:IvL, L2:IvL) = V:Iv ; ivapp(L1:IvL, L2:IvL) .
+  op rulapp : RuleL RuleL -> RuleL .
+  eq rulapp(rnil, L2:RuleL) = L2:RuleL .
+  eq rulapp(R:Rule ; L1:RuleL, L2:RuleL) = R:Rule ; rulapp(L1:RuleL, L2:RuleL) .
+
+  *** --- cut_for 鏡像(Mirror.cut_for):filter ct_pred 後 fold-min ---
+  op ctpred : Ev Ev -> Bool .
+  eq ctpred(A:Ev, B:Ev)
+     = not(eid(B:Ev) == eid(A:Ev))
+       and (esto(B:Ev) == esto(A:Ev))
+       and kconf(ekd(A:Ev), ekd(B:Ev))
+       and (st(eiv(A:Ev)) < st(eiv(B:Ev)))
+       and over(eiv(A:Ev), eiv(B:Ev)) .
+
+  op cands : Ev EvL -> EvL .
+  eq cands(A:Ev, nil) = nil .
+  eq cands(A:Ev, B:Ev ; L:EvL)
+     = if ctpred(A:Ev, B:Ev) then B:Ev ; cands(A:Ev, L:EvL)
+       else cands(A:Ev, L:EvL) fi .
+
+  op nocut : -> [Nat] .
+  op foldmin : EvL -> [Nat] .
+  eq foldmin(nil) = nocut .
+  eq foldmin(B:Ev ; L:EvL)
+     = if foldmin(L:EvL) == nocut then st(eiv(B:Ev))
+       else min(st(eiv(B:Ev)), foldmin(L:EvL)) fi .
+
+  op cutfor : Ev EvL -> [Nat] .
+  eq cutfor(A:Ev, L:EvL) = foldmin(cands(A:Ev, L:EvL)) .
+
+  *** --- 菜單(Rust/Rocq: ct_applicable;對每個 a 取尾巴列表 a::L 的 cut) ---
+  op mkrule : [Nat] Ev -> RuleL .
+  eq mkrule(nocut, A:Ev) = rnil .
+  eq mkrule(C:Nat, A:Ev) = r1(eid(A:Ev), C:Nat) ; rnil .
+  op menu : EvL -> RuleL .
+  eq menu(nil) = rnil .
+  eq menu(A:Ev ; L:EvL) = rulapp(mkrule(cutfor(A:Ev, A:Ev ; L:EvL), A:Ev), menu(L:EvL)) .
+
+  *** --- apply(R1Shorten):第一個 id 命中者,切斷右端(Rust r1_apply) ---
+  op r1app : EvL Nat Nat -> EvL .
+  eq r1app(nil, I:Nat, C:Nat) = nil .
+  eq r1app(E:Ev ; L:EvL, I:Nat, C:Nat)
+     = if eid(E:Ev) == I:Nat then trimE(E:Ev, C:Nat) ; L:EvL
+       else E:Ev ; r1app(L:EvL, I:Nat, C:Nat) fi .
+
+  op apR : EvL Rule -> EvL .
+  eq apR(S:EvL, r1(I:Nat, C:Nat)) = r1app(S:EvL, I:Nat, C:Nat) .
+
+  *** --- 紅邊計數(rt = nil;見檔頭限定)---
+  op redct : EvL -> Nat .
+  eq redct(nil) = 0 .
+  eq redct(A:Ev ; L:EvL) = cnt(A:Ev, L:EvL) + redct(L:EvL) .
+  op cnt : Ev EvL -> Nat .
+  eq cnt(A:Ev, nil) = 0 .
+  eq cnt(A:Ev, B:Ev ; L:EvL)
+     = (if (esto(B:Ev) == esto(A:Ev)) and kconf(ekd(A:Ev), ekd(B:Ev)) and over(eiv(A:Ev), eiv(B:Ev))
+        then 1 else 0 fi) + cnt(A:Ev, L:EvL) .
+
+  *** --- Guarded =「µ 嚴格遞減才留下」(第二分量恆 0 ⇒ 純紅邊計數) ---
+  op gkeep : RuleL EvL Nat -> RuleL .
+  eq gkeep(rnil, S:EvL, B:Nat) = rnil .
+  eq gkeep(R:Rule ; RS:RuleL, S:EvL, B:Nat)
+     = if redct(apR(S:EvL, R:Rule)) < B:Nat then R:Rule ; gkeep(RS:RuleL, S:EvL, B:Nat)
+       else gkeep(RS:RuleL, S:EvL, B:Nat) fi .
+  op gmenu : EvL -> RuleL .
+  eq gmenu(S:EvL) = gkeep(menu(S:EvL), S:EvL, redct(S:EvL)) .
+
+  *** --- P1:cut > 觀察者 istart(cut_for_gt_start 的資料版) ---
+  op ltcut : Nat [Nat] -> Bool .
+  eq ltcut(S:Nat, nocut) = true .
+  eq ltcut(S:Nat, C:Nat) = S:Nat < C:Nat .
+  op chkCut : EvL -> Bool .
+  eq chkCut(nil) = true .
+  eq chkCut(A:Ev ; L:EvL) = ltcut(st(eiv(A:Ev)), cutfor(A:Ev, A:Ev ; L:EvL)) and chkCut(L:EvL) .
+
+  *** --- P2:等式級菱形(精確交換)---
+  op diaIn : Rule RuleL EvL -> Bool .
+  eq diaIn(R:Rule, rnil, S:EvL) = true .
+  eq diaIn(R1:Rule, R2:Rule ; RS:RuleL, S:EvL)
+     = (apR(apR(S:EvL, R1:Rule), R2:Rule) == apR(apR(S:EvL, R2:Rule), R1:Rule))
+       and diaIn(R1:Rule, RS:RuleL, S:EvL) .
+  op dia : RuleL RuleL EvL -> Bool .
+  eq dia(rnil, RS:RuleL, S:EvL) = true .
+  eq dia(R1:Rule ; RS1:RuleL, RS2:RuleL, S:EvL)
+     = diaIn(R1:Rule, RS2:RuleL, S:EvL) and dia(RS1:RuleL, RS2:RuleL, S:EvL) .
+
+  *** --- P4:start 向量不變;P5:wf 保持 ---
+  op startsOf : EvL -> NatL .
+  eq startsOf(nil) = nnil .
+  eq startsOf(A:Ev ; L:EvL) = st(eiv(A:Ev)) ; startsOf(L:EvL) .
+  op wfchk : EvL -> Bool .
+  eq wfchk(nil) = true .
+  eq wfchk(A:Ev ; L:EvL) = (st(eiv(A:Ev)) < en(eiv(A:Ev))) and wfchk(L:EvL) .
+  op keeps : RuleL EvL -> Bool .
+  eq keeps(rnil, S:EvL) = true .
+  eq keeps(R:Rule ; RS:RuleL, S:EvL)
+     = (startsOf(apR(S:EvL, R:Rule)) == startsOf(S:EvL))
+       and wfchk(apR(S:EvL, R:Rule)) and keeps(RS:RuleL, S:EvL) .
+
+  op stateOK : EvL -> Bool .
+  eq stateOK(S:EvL)
+     = chkCut(S:EvL)
+       and dia(menu(S:EvL), menu(S:EvL), S:EvL)
+       and keeps(menu(S:EvL), S:EvL)
+       and (gmenu(S:EvL) == menu(S:EvL))
+       and wfchk(S:EvL) .
+
+  *** --- 宇宙枚舉(Rust enumerate_states / Rocq mirror 同款生成式)---
+  op rowFor : Nat Nat Nat -> IvL .
+  eq rowFor(S:Nat, E:Nat, M:Nat)
+     = if E:Nat <= M:Nat then i(S:Nat, E:Nat) ; rowFor(S:Nat, E:Nat + 1, M:Nat) else inil fi .
+  op ivsAux : Nat Nat -> IvL .
+  eq ivsAux(S:Nat, M:Nat)
+     = if S:Nat < M:Nat then ivapp(rowFor(S:Nat, S:Nat + 1, M:Nat), ivsAux(S:Nat + 1, M:Nat)) else inil fi .
+  op allIv : Nat -> IvL .
+  eq allIv(M:Nat) = ivsAux(0, M:Nat) .
+
+  op kvL : IvL -> KIvL .
+  eq kvL(inil) = knil .
+  eq kvL(V:Iv ; VL:IvL) = (Mut pair V:Iv) ; ((Sh pair V:Iv) ; kvL(VL:IvL)) .
+
+  op mapCons : KIvSpec EvLL Nat -> EvLL .
+  eq mapCons(KV:KIvSpec, elnil, K:Nat) = elnil .
+  eq mapCons((KD:EvKind pair V:Iv), (EL:EvL ;; ELL:EvLL), K:Nat)
+     = (ev(K:Nat, 0, KD:EvKind, V:Iv) ; EL:EvL) ;; mapCons((KD:EvKind pair V:Iv), ELL:EvLL, K:Nat) .
+  op elapp : EvLL EvLL -> EvLL .
+  eq elapp(elnil, B:EvLL) = B:EvLL .
+  eq elapp((EL:EvL ;; A:EvLL), B:EvLL) = EL:EvL ;; elapp(A:EvLL, B:EvLL) .
+  op consAll : KIvL EvLL Nat -> EvLL .
+  eq consAll(knil, ELL:EvLL, K:Nat) = elnil .
+  eq consAll(KV:KIvSpec ; KVL:KIvL, ELL:EvLL, K:Nat)
+     = elapp(mapCons(KV:KIvSpec, ELL:EvLL, K:Nat), consAll(KVL:KIvL, ELL:EvLL, K:Nat)) .
+
+  op combosFrom : Nat Nat Nat -> EvLL .
+  eq combosFrom(K:Nat, N:Nat, M:Nat)
+     = if K:Nat == N:Nat then (nil ;; elnil)
+       else consAll(kvL(allIv(M:Nat)), combosFrom(K:Nat + 1, N:Nat, M:Nat), K:Nat) fi .
+  op allStates : Nat Nat -> EvLL .
+  eq allStates(N:Nat, M:Nat) = combosFrom(0, N:Nat, M:Nat) .
+
+  op ellen : EvLL -> Nat .
+  eq ellen(elnil) = 0 .
+  eq ellen(EL:EvL ;; ELL:EvLL) = 1 + ellen(ELL:EvLL) .
+
+  op allOK : EvLL -> Bool .
+  eq allOK(elnil) = true .
+  eq allOK(EL:EvL ;; ELL:EvLL) = stateOK(EL:EvL) and allOK(ELL:EvLL) .
+endfm
+
+*** 計數契約 sanity:(m(m+1))^n —— (3,3) 應為 1728、(3,4) 應為 8000,
+*** 與 Rust reconcile 的 count(3,3)=1728 / count(3,4)=8000 對帳。
+red ellen(allStates(3, 3)) .
+red ellen(allStates(3, 4)) .
+*** 主檢查:全宇宙五性質(P1∧P2∧P3∧P4∧P5)。
+red allOK(allStates(3, 3)) .
+red allOK(allStates(3, 4)) .
+red allOK(allStates(3, 5)) .
+
+*** 倒掛宇宙(Rust examples/r3_wf.rs 第二節同款):end 任取 0..m(可 < start)。
+*** 此宇宙只驗 P2(精確交換)—— wf 由構造不成立,其餘性質口徑如 Rust 探針。
+*** 意義:ROCQ-TRACE「倒掛不破壞精確交換、但不能當定理前提」的第三次複現。
+fmod CT-XCHECK-WIDE is
+  protecting CT-XCHECK .
+  op rowForW : Nat Nat Nat -> IvL .
+  eq rowForW(S:Nat, E:Nat, M:Nat)
+     = if E:Nat <= M:Nat then i(S:Nat, E:Nat) ; rowForW(S:Nat, E:Nat + 1, M:Nat) else inil fi .
+  op ivsAuxW : Nat Nat -> IvL .
+  eq ivsAuxW(S:Nat, M:Nat)
+     = if S:Nat <= M:Nat then ivapp(rowForW(S:Nat, 0, M:Nat), ivsAuxW(S:Nat + 1, M:Nat)) else inil fi .
+  op combosFromW : Nat Nat Nat -> EvLL .
+  eq combosFromW(K:Nat, N:Nat, M:Nat)
+     = if K:Nat == N:Nat then (nil ;; elnil)
+       else consAll(kvL(ivsAuxW(0, M:Nat)), combosFromW(K:Nat + 1, N:Nat, M:Nat), K:Nat) fi .
+  op allStatesW : Nat Nat -> EvLL .
+  eq allStatesW(N:Nat, M:Nat) = combosFromW(0, N:Nat, M:Nat) .
+  op allDia : EvLL -> Bool .
+  eq allDia(elnil) = true .
+  eq allDia(EL:EvL ;; ELL:EvLL)
+     = dia(menu(EL:EvL), menu(EL:EvL), EL:EvL) and allDia(ELL:EvLL) .
+endfm
+
+red ellen(allStatesW(3, 3)) .   *** 期望 32768(= ((m+1)^2×2)^n)
+red allDia(allStatesW(3, 3)) .  *** 期望 true(0 個非精確交換,同 Rust)
+
+quit
