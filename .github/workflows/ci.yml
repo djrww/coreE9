@@ -35,6 +35,26 @@ jobs:
       - name: rustdoc (deny warnings)
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 
+  rocq:
+    name: rocq gate(Phase 0/1:mirror + Newman + 對帳)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rocq(Coq)+ MathComp
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y coq libcoq-mathcomp-ssreflect
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build theorem library
+        run: make -C rocq
+
+      - name: Reconcile(Rust 實例 ↔ Rocq 鏡像)
+        run: make -C rocq reconcile
+
   coverage:
     name: coverage gate(core ≥ 90%,ast ≥ 75% 豁免)
     runs-on: ubuntu-latest

@@ -6,6 +6,18 @@
 
 ---
 
+## 〇′、Rocq 形式化對照(Phase 0/1,詳見 docs/ROCQ-TRACE.md)
+
+| 定理 | 內容 | 狀態 |
+|---|---|---|
+| R1 | 抽象 Newman:`sn r -> wcr r -> confluent r`(Huet 式,構造) | ✅ 已證 |
+| R4 | `newman_unf`(唯一正規形)+ `exists_normal_form` | ✅ 已證 |
+| R2/R3/R5/R6/R7 | 具體 SN / 具體 WCR / L7b 終止 / T2 / 反例存在 | ⬜ Phase 2–6 |
+
+配套:內核鏡像 `rocq/theories/Mirror.v`(D1–D6 決策)+ 對帳框架
+`tools/rocq_reconcile.py`(Rust 實例 ↔ Rocq 計算,kernel 複驗 19 樣本點;
+已抓出並修正 R4Runtime 尾插/頭插分歧)+ CI job `rocq`。
+
 ## 〇、測試全量清單(46 具名測試)
 
 **CL0 載體 — 九律 + 編輯單體 + 定理 + 語義面(31,`tests/laws.rs`)**
