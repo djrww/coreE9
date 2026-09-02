@@ -144,8 +144,15 @@ CI 裡一個 20 分鐘的 job 會把「每次提交都跑形式化」變成人�
    > **best-of-n(min,cv 0.3–3.3%)** 判紅,median 降為環境污染警告。另加
    > `null` 環境標尺(跨機漂移 1.30× 可被完全抵消)、`--update` 同機刷基線、
    > `--tiny-us` 保留 informational 開關(預設 0 = 全硬判)。判別力由
-   > `tools/bench_gate_selftest.py`(9 情境)固化,已掛 CI。**固有盲区**:所有內核
+   > `tools/bench_gate_selftest.py`(13 情境)固化,已掛 CI。**固有盲区**:所有內核
    > 與 null 同步變慢時比值法無法區分,需用 `--assume-env-stable` 或重刷基線。
+   > ✅ **2026-09-03 健檢再修兩處判定式**(門檻「看起來在守、實際沒在守」):
+   > (P2-4)污染度 `contam = median/min − 1` 算了卻只拿來印,且文件中的 `tol − band`
+   > 方向是反的(越吵的內核容差越小)⇒ 改 **單向放寬** `min(contam − floor, 10pp)`;
+   > (P2-5)`null` 標尺 median 17 ns / MAD 1 ns,純噪聲就能讓它漂兩位數百分比,
+   > 而 `corr > 1` 單向放寬 ⇒ 紅線在 1.20×~1.34× 搖擺 ⇒ 加**顯著性門檻**
+   > `|corr−1| > 2 × null 相對 MAD` 才校正(實測 −11.8% 未過檻,不校正)。
+   > 兩處各由一對**配對差分**合成情境釘住(只有一個變因不同,舊版 gate 必錯一邊)。
 2. **coverage 改「關鍵路徑覆蓋」**:除行覆蓋外,加「每條具名測試必須真的執行其聲稱的符號」
    —— 用 `#[cfg(test)]` 計數器或 `cov_gate.py` 的 per-symbol 檢查;豁免只准「列舉原因 + 行級白名單」。
 3. **數字單一來源(single source of truth)**:新增 `tools/gen_status.py`,由

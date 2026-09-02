@@ -75,6 +75,11 @@ jobs:
       - name: Collect coverage
         run: cargo llvm-cov --lcov --output-path target/coverage.lcov
 
+      # 先自測 gate 判別力:空報告 / 模組缺席 / 同名 basename 都必須紅
+      # (舊版對這些一律 exit 0 —— 門檻只在文件裡存在)
+      - name: Coverage gate self-test(fail-open guards)
+        run: python3 tools/cov_gate_selftest.py
+
       - name: Coverage gate
         run: python3 tools/cov_gate.py target/coverage.lcov
 

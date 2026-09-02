@@ -2,8 +2,17 @@
 """`tools/bench_gate.py` 的判別力自測(2026-09-02 修 gate 時一併入庫)。
 
 為什麼需要它:重寫前的 gate 在 main HEAD 長期紅,而重寫後很容易「修到永遠綠」
-——那比永遠紅更糟。本腳本用**合成資料**驗七個情境,每個都斷言確定的 exit code,
+——那比永遠紅更糟。本腳本用**合成資料**驗十三個情境,每個都斷言確定的 exit code,
 跑在 CI 的 `bench` job 裡(先自測 gate、再判真實代碼)。
+
+情境分三組:
+  A. 基本判別力(1–9,2026-09-02):無變化/整機慢/只有代碼慢/變快/tiny 內核…;
+  B. 污染度單向放寬(10–11,2026-09-03 健檢 P2-4):同樣的 best 慢 25%,
+     污染度低 → 紅,污染度高 → 綠。這對情境同時釘住兩件事:污染度**真的**
+     參與判定(舊版算了卻沒用),而且只會**放寬**、不會放緊;
+  C. null 漂移顯著性門檻(12–13,2026-09-03 健檢 P2-5):同一個「代碼慢 28%」,
+     null 漂移落在噪聲帶內 → 不校正 → 紅;null 漂移遠超噪聲 → 視為環境 → 綠。
+     防止 16 ns 的底噪單方面挪動紅線。
 
 用法:python3 tools/bench_gate_selftest.py
 """
@@ -21,30 +30,48 @@ KERNELS = ["lex", "parse", "laminar", "named_sexp", "l7b_evaluate", "r0_lex", "r
 
 TINY = {"lex", "r0_lex"}          # <10 µs/樣本的两個內核
 
+# 各內核的基線 median(ms/樣本)
+MED = {"lex": 0.0007, "parse": 0.0044, "laminar": 0.0092, "named_sexp": 0.0098,
+       "l7b_evaluate": 0.0077, "r0_lex": 0.0006, "r0_parse": 0.0028, "newman_3x4x6": 6.9}
+
+
+def _stat(med, mad, reps, samples, mn=None, mx=None):
+    return {
+        "median_ms_per_sample": med,
+        "mad_ms": mad,
+        "min_ms": mn if mn is not None else med * 0.97,
+        "max_ms": mx if mx is not None else med * 1.05,
+        "reps": reps,
+        "samples_per_rep": samples,
+    }
+
 
 def payload(scale_k=1.0, scale_n=1.0, scale_tiny=1.0, base=False):
     """造一份 hotpaths-v2 的統計;scale_* 為相對基線的放大倍率。"""
     k = {"null": _stat(0.0002 * scale_n, 0.00001 * scale_n, 9, 1000)}
-    med = {"lex": 0.0007, "parse": 0.0044, "laminar": 0.0092, "named_sexp": 0.0098,
-           "l7b_evaluate": 0.0077, "r0_lex": 0.0006, "r0_parse": 0.0028, "newman_3x4x6": 6.9}
     for name in KERNELS:
         f = scale_tiny if name in TINY else scale_k
-        s = _stat(med[name] * f, med[name] * 0.02 * f, 9, 1000)
+        s = _stat(MED[name] * f, MED[name] * 0.02 * f, 9, 1000)
         k[name] = s
     if base:  # 基線不帶 null 的漂移資訊:與 cur 同值即可
         k["null"] = _stat(0.0002, 0.00001, 9, 1000)
     return json.dumps({"kernels": k, "harness": "hotpaths-v2"})
 
 
-def _stat(med, mad, reps, samples):
-    return {
-        "median_ms_per_sample": med,
-        "mad_ms": mad,
-        "min_ms": med * 0.97,
-        "max_ms": med * 1.05,
-        "reps": reps,
-        "samples_per_rep": samples,
-    }
+def payload_contam(scale_k=1.25, scale_n=1.0, contam=0.20):
+    """造一份「best(min) 確實慢了 `scale_k`,但本趟污染度為 `contam`」的語料。
+
+    與 `payload()` 的差別:污染度由 `min` 與 `median` 的比值**獨立**控制,
+    `min` 仍舊精確地慢 `scale_k` 倍 —— 這樣才能把「污染度對門檻的影響」
+    從「best 的回歸幅度」裡分離出來(健檢 P2-4)。
+    """
+    k = {"null": _stat(0.0002 * scale_n, 0.00001 * scale_n, 9, 1000)}
+    for name in KERNELS:
+        f = scale_k if name not in TINY else 1.0
+        mn = MED[name] * 0.97 * f          # min:確實慢 f 倍(這是判定用的量)
+        md = mn * (1.0 + contam)           # median:污染度 = md/mn − 1
+        k[name] = _stat(md, md * 0.02, 9, 1000, mn=mn, mx=md * 1.05)
+    return json.dumps({"kernels": k, "harness": "hotpaths-v2"})
 
 
 def run(tmp, log_text, extra=()):
@@ -61,7 +88,7 @@ def run(tmp, log_text, extra=()):
 
 
 CASES = [
-    # (說明, 語料參數, 額外旗標, 期望 exit code)
+    # ── A. 基本判別力(2026-09-02)────────────────────────────────────────
     ("實測無變化 → 綠", dict(), [], 0),
     ("整台機慢 30%(null 同步)→ 不誤判", dict(scale_k=1.30, scale_n=1.30), [], 0),
     ("只有代碼慢 30%(null 不動)→ 紅", dict(scale_k=1.30, scale_n=1.00), [], 1),
@@ -75,14 +102,29 @@ CASES = [
      dict(scale_k=1.60, scale_n=1.00), ["--tiny-us", "10"], 1),
     ("只有 tiny 內核慢:--tiny-us 10 → 綠(informational)",
      dict(scale_tiny=3.0, scale_n=1.00), ["--tiny-us", "10"], 0),
+
+    # ── B. 污染度單向放寬(2026-09-03 健檢 P2-4)──────────────────────────
+    #     同一個 best(慢 25%),只有污染度不同 ⇒ 門檻只許變鬆、不許變緊。
+    ("污染度低(3%):best 慢 25% → 紅(基準有效容差 20%)",
+     payload_contam(scale_k=1.25, contam=0.03), [], 1),
+    ("同一個 best(慢 25%)但本趟污染度 20% → 門檻單向放寬,綠(不護短也不誤紅)",
+     payload_contam(scale_k=1.25, contam=0.20), [], 0),
+
+    # ── C. null 漂移顯著性門檻(2026-09-03 健檢 P2-5)─────────────────────
+    #     同一個「代碼慢 28%」,只差 null 漂移是否在其自身噪聲之內。
+    ("null 漂移 +8%(在其自身 2× 噪聲內)→ 不校正:代碼慢 28% 仍紅",
+     payload(scale_k=1.28, scale_n=1.08), [], 1),
+    ("null 漂移 +30%(遠超噪聲)→ 校正:同樣慢 28% 視為環境,綠",
+     payload(scale_k=1.28, scale_n=1.30), [], 0),
 ]
 
 
 def main():
     bad = 0
     with tempfile.TemporaryDirectory() as tmp:
-        for desc, kw, extra, want in CASES:
-            rc, out = run(tmp, payload(**kw), extra)
+        for desc, spec, extra, want in CASES:
+            log_text = payload(**spec) if isinstance(spec, dict) else spec
+            rc, out = run(tmp, log_text, extra)
             ok = rc == want
             bad += 0 if ok else 1
             print(f"{'✅' if ok else '❌'} {desc:<46} rc={rc}(期望 {want})")

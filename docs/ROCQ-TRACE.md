@@ -245,7 +245,11 @@ CI(`.github/workflows/ci.yml` → job `rocq`):apt 裝 coq + mathcomp →
    所依託的 bench gate 曾在 CI 與本地**同時紅**(原因非代碼回歸:基線單機單次採樣
    + µs 級指標以 median 判定)。2026-09-02 已修:`tools/bench_gate.py` 改採
    **best-of-n** 判据 + `null` 環境標尺校正 + 同機 `--update` 基線 +
-   `tools/bench_gate_selftest.py`(9 情境判別力自測,掛 CI)。本沙箱實跑:
-   fmt/clippy/doc/test 47/47/reconcile 19 項/rocq/coverage/bench **全綠**。
+   `tools/bench_gate_selftest.py`(2026-09-03 起為 **13** 情境判別力自測,掛 CI)。
+   本沙箱實跑:fmt/clippy/doc/reconcile 19 項/rocq/coverage/bench **全綠**。
+   2026-09-03 健檢並修了 gate 判定式本身兩處(污染度算了沒用且方向反、
+   null 底噪挪動紅線),見 `docs/BENCH.md`;另修 `tools/cov_gate.py` 的四條
+   fail-open 防線(空報告 / 模組缺席 / 只剩被過濾的 bin / 同名 basename
+   皆須判紅),並入庫 `tools/cov_gate_selftest.py`(9 情境,掛 CI)。
    **仍保留的限定**:CI runner 與基線不同機(4 核 vs 2 核),首次 CI 跑後需在
    該機 `--update` 一次才算「同境基線」;在此之前不宣稱「全管線綠(含 CI)」。
