@@ -46,38 +46,55 @@ jobs:
   # 故:定理庫走容器矩陣,對帳留在單一版本(Rust ↔ Rocq 的語義一致性與
   # coq 版本無關,它是兩個獨立實作的對比)。
   rocq:
-    name: rocq theorems · coq ${{ matrix.coq_version }}
+    name: rocq theorems · ${{ matrix.label }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false          # 一格紅不要停掉另一格:要看見「哪個版本斷」
       matrix:
-        # 本機(沙箱 apt)實測:8.20.1 + OCaml 5.3.0 全綠。
-        # 9.2 為官方 Rocq 改名後的版本(Stdlib 更名,`Coq` 仍為別名)。
-        coq_version: ["8.20", "9.2"]
+        include:
+          - label: "coq 8.20"
+            id: "coq-8.20"
+            image: "coqorg/coq:8.20"
+          - label: "rocq 9.2"
+            id: "rocq-9.2"
+            image: "rocq/rocq-prover:9.2"
     steps:
       - uses: actions/checkout@v4
 
-      - uses: coq-community/docker-coq-action@v1
-        with:
-          coq_version: ${{ matrix.coq_version }}
-          ocaml_version: "4.14-flambda"
-          before_script: |
-            startGroup "toolchain versions"
-              coqc --version
-              ocamlc -version
-              coqc --version > rocq-version.txt
-            endGroup
-          script: |
-            startGroup "build theorem library"
-              make -C rocq
-            endGroup
+      # 為什麼不用 coq-community/docker-coq-action(2026-09-03 實測修正):
+      # 它只認 coqorg/coq 這個 repo,而 Docker Hub 上該 repo **最高只有 8.20,
+      # 沒有任何 9.x 標籤**;Rocq 9 換到 `rocq/rocq-prover`(9.0/9.1/9.2/9.3)。
+      # 本形式化只用標準庫、不建 opam 套件,action 那層 opam pin/uninstall 機制
+      # 完全用不到 —— 留著只是多一個間接層。故改成直接 docker run,兩格同一套
+      # 指令,行為可在任何有 docker 的機器上一字不改複現。
+      - name: Build theorem library in ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/src" -w /src "${{ matrix.image }}" bash -lc '
+            set -e
+            echo "== toolchain =="
+            coqc --version
+            ocamlc -version
+            echo "== build =="
+            make -C rocq
+            echo "== guards =="
+            # 斷言 1:建置真的產出了物件檔(防 make 靜默空轉 / 依賴沒接上)
+            for f in Mirror WCRUtil AbstractArs ConcreteSN ConcreteWCR; do
+              test -f "rocq/theories/$f.vo" || { echo "MISSING $f.vo"; exit 1; }
+            done
+            # 斷言 2:定理庫不得含 Admitted / Axiom(本專案的硬底線)
+            if grep -rnE "Admitted|Axiom" rocq/theories/*.v; then
+              echo "FOUND Admitted/Axiom"; exit 1
+            fi
+            echo "guards ok"
+          ' 2>&1 | tee "rocq-version-${{ matrix.id }}.txt"
 
-      # artifact 存版本行:日後要複現任何一次綠,先知道它是哪個版本綠的
       - name: Upload version line
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rocq-version-${{ matrix.coq_version }}
-          path: rocq-version.txt
+          name: rocq-version-${{ matrix.id }}
+          path: rocq-version-${{ matrix.id }}.txt
           if-no-files-found: warn
 
   rocq-reconcile:
@@ -174,10 +191,10 @@ jobs:
         with:
           components: llvm-tools-preview
 
-      - name: Install Rocq(Coq)+ MathComp
+      - name: Install Rocq(Coq)
         run: |
           sudo apt-get update
-          sudo apt-get install -y coq libcoq-mathcomp-ssreflect
+          sudo apt-get install -y coq
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
