@@ -1,6 +1,8 @@
 # cl0r0 專案現況分析與後續開發路徑
 
-> 基線:`v0.1.1`(main @ 003e37c)· rustc 1.98.0 · 5,583 行 · 零依賴
+[![CI](https://github.com/djrww/coreE9/actions/workflows/ci.yml/badge.svg)](https://github.com/djrww/coreE9/actions/workflows/ci.yml)
+
+> 基線:`v0.1.1`(main @ 003e37c)· rustc 1.98.0 · 5,583 行 · 零依賴 · 第一迭代已完成(見 §四「建議節奏」)
 
 ---
 

@@ -1,536 +1,6 @@
-//! R₀ —— 實用載體(報告 §7.2 / 附錄 B)。
-//!
-//! R₀ 是 Rust 的刻意子集,覆蓋 judge/borrow 實際需要的現場:
-//! items(`fn` / `struct`)、語句(`let` / `expr;` / `return`)、表達式
-//! (借用 / 解引用 / 賦值 / 調用 / 字段 / 索引 / `if` / `while` / `loop`)。
-//!
-//! **排除項(全部以「側條件」身份存在,由 `unsupported` 如實申報,
-//! 不假裝覆蓋 —— 這是 `internal/toolchain` Available() 紀律的 R₀ 對應)**:
-//!   泛型實參歧義(無 `<...>` → 沒有 `>>` 拆分問題,§5.1)、宏、閉包、
-//!   模式匹配全集、trait、生命週期、`impl` / `use` / `mod` 等項。
-//!
-//! **本模組交付**(與報告路線一致:九律全量在 CL0 上驗證;R₀ 做「接線預備層」):
-//!   1. 附錄 B 的機讀 EBNF(`R0_EBNF`);
-//!   2. R₀ 正則詞法(Dfa lexer,逐字節平鋪,含 raw string `r#"…"#`);
-//!   3. `unsupported(src)` —— 越界構造掃描器(如實申報);
-//!   4. `lalr1_clean(src)` —— LALR(1)-乾淨片段斷言(歧義構造不存在);
-//!   5. `r0_parse(src)` —— 附錄 B EBNF → 表面語法樹(連續性/樹公理/laminar/
-//!      無損回環 + 節點級 `unsupported` 申報,§9 如實申報的結構化形式)。
-
-use crate::span::Span;
-
-/// 附錄 B:R₀ 的機讀 EBNF(本模組的語法契約)。
-pub const R0_EBNF: &str = r#"(* 附錄 B — R₀:實用載體。設計準則:落在 LALR(1) 可處理的片段內,歧義點以側條件排除。 *)
-program  = { item } ;
-item     = fn_item | struct_item ;
-fn_item  = "fn" IDENT "(" [ params ] ")" [ "->" type ] block ;
-struct_item = "struct" IDENT "{" [ field { "," field } [","] ] "}" ;
-field    = IDENT ":" type ;
-params   = param { "," param } ;
-param    = IDENT [ ":" type ] ;
-type     = IDENT | "&" [ "mut" ] type | "[" type "]" ;
-block    = "{" { stmt } "}" ;
-stmt     = let_stmt | return_stmt | if_stmt | while_stmt | loop_stmt | expr_stmt ;
-let_stmt = "let" [ "mut" ] IDENT [ ":" type ] [ "=" expr ] ";" ;
-return_stmt = "return" [ expr ] ";" ;
-if_stmt  = "if" expr block [ "else" ( if_stmt | block ) ] ;
-while_stmt = "while" expr block ;
-loop_stmt = "loop" block ;
-expr_stmt = expr ";" ;
-expr     = assign ;
-assign   = or_expr [ "=" assign ] ;
-or_expr  = and_expr { "||" and_expr } ;
-and_expr = eq_expr { "&&" eq_expr } ;
-eq_expr  = rel_expr { ( "==" | "!=" ) rel_expr } ;
-rel_expr = add_expr { ( "<" | "<=" | ">" | ">=" ) add_expr } ; (* 側條件:無泛型 ⟹ < 恆為比較 *)
-add_expr = mul_expr { ( "+" | "-" ) mul_expr } ;
-mul_expr = unary { ( "*" | "/" | "%" ) unary } ;
-unary    = [ ( "&" | "&mut " | "*" | "!" ) ] postfix ;
-postfix  = primary { "." IDENT | "[" expr "]" | "(" [ args ] ")" } ;
-primary  = NUMBER | "true" | "false" | IDENT | "(" expr ")" | block ;
-args     = expr { "," expr } ;
-(* 側條件(排除項,與歧義 / Type-2 邊界相關,由 `unsupported` 如實申報):
-   1. 無泛型實參:不存在 `<Type>` / `>>` 拆分歧義(§5.1 兩個非正則點之一被側條件排除);
-   2. 無宏 `!`、無閉包 `|…|`、無 `match` 模式、無 trait / impl / use / mod / pub / unsafe;
-   3. 無生命週期 `'a`(raw string 內部除外)。                              *)
-"#;
-
-/// R₀(Rust 實用子集,附錄 B / §7.2)的詞法單元種類。
-/// 覆蓋面契約之外的語法由 `r0_parse` 如實申報 `unsupported`(§9 非目標)。
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum R0TokKind {
-    /// 識別字(r# 前綴的 raw ident 不屬於 R₀)。
-    Ident,
-    /// 十進制整數字面量。
-    Number,
-    /// 關鍵字 `fn`。
-    Fn,
-    /// 關鍵字 `struct`。
-    Struct,
-    /// 關鍵字 `let`。
-    Let,
-    /// 關鍵字 `mut`。
-    Mut,
-    /// 關鍵字 `if`。
-    If,
-    /// 關鍵字 `else`。
-    Else,
-    /// 關鍵字 `while`。
-    While,
-    /// 關鍵字 `loop`。
-    Loop,
-    /// 關鍵字 `return`。
-    Return,
-    /// 字面量 `true`。
-    True,
-    /// 字面量 `false`。
-    False,
-    /// `&`(共享借用)。
-    Amp,
-    /// `&mut`(可變借用;兩個 token 的詞法合併,非 `&`+`mut`)。
-    AmpMut,
-    /// `*`(解引用)。
-    Star,
-    /// `+`。
-    Plus,
-    /// `-`。
-    Minus,
-    /// `=`(賦值/綁定)。
-    Eq,
-    /// `==`(相等)。
-    EqEq,
-    /// `!=`(不等)。
-    NotEq,
-    /// `<`。
-    Lt,
-    /// `<=`。
-    Le,
-    /// `>`。
-    Gt,
-    /// `>=`。
-    Ge,
-    /// `&&`(邏輯與)。
-    AndAnd,
-    /// `||`(邏輯或)。
-    OrOr,
-    /// `!`(邏輯非)。
-    Not,
-    /// `.`(字段訪問)。
-    Dot,
-    /// `;`。
-    Semi,
-    /// `:`(類型標註)。
-    Colon,
-    /// `,`。
-    Comma,
-    /// `(`。
-    LParen,
-    /// `)`。
-    RParen,
-    /// `{`。
-    LBrace,
-    /// `}`。
-    RBrace,
-    /// `[`(索引左界)。
-    LBrack,
-    /// `]`(索引右界)。
-    RBrack,
-    /// `->`(返回類型箭頭)。
-    Arrow,
-    /// raw string 字面量 `r#"…"#`(R₀ 唯一的面板式詞法項)。
-    RawString,
-    /// `/`(整除,非註釋;R₀ 註釋以標準 `//` 詞法處理)。
-    Slash,
-    /// `%`(取模)。
-    Percent,
-    /// 空白與 `//` 註釋(平鋪保留,不進 R₀ 樹)。
-    Trivia,
-    /// 詞法錯誤字元(仍佔一個平鋪 token ⇒ 全化)。
-    Bad,
-}
-
-/// R₀ 詞法單元:種類 + 源碼跨度。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct R0Token {
-    /// 單元種類。
-    pub kind: R0TokKind,
-    /// 半開跨度 [start, end)。
-    pub span: Span,
-}
-
-/// R₀ 詞法器:DFA / 正則,逐字節平鋪(與 CL0 詞法器同一不變量紀律)。
-/// `>>` 只會是兩個 `>`(無泛型 ⇒ 無 Shl token ⇒ 無 §5.1 拆分問題)。
-pub fn r0_lex(src: &str) -> Vec<R0Token> {
-    let b = src.as_bytes();
-    let mut toks = Vec::new();
-    let mut i = 0usize;
-    let push = |toks: &mut Vec<R0Token>, kind: R0TokKind, start: usize, end: usize| {
-        toks.push(R0Token {
-            kind,
-            span: Span::new(start as u32, end as u32),
-        })
-    };
-    while i < b.len() {
-        let s = i;
-        match b[i] {
-            b' ' | b'\t' | b'\r' | b'\n' => {
-                while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\r' | b'\n') {
-                    i += 1;
-                }
-                push(&mut toks, R0TokKind::Trivia, s, i);
-            }
-            b'/' if i + 1 < b.len() && b[i + 1] == b'/' => {
-                while i < b.len() && b[i] != b'\n' {
-                    i += 1;
-                }
-                push(&mut toks, R0TokKind::Trivia, s, i);
-            }
-            b'0'..=b'9' => {
-                while i < b.len() && b[i].is_ascii_digit() {
-                    i += 1;
-                }
-                push(&mut toks, R0TokKind::Number, s, i);
-            }
-            b'r' if i + 1 < b.len() && b[i + 1] == b'#' => {
-                // raw string r#"…"#(可以含 #更多)
-                let mut j = i + 2;
-                let mut hashes = 1;
-                while j < b.len() && b[j] == b'#' {
-                    hashes += 1;
-                    j += 1;
-                }
-                if j >= b.len() || b[j] != b'"' {
-                    // 不是 raw string:退回普通 ident(但 r# 開頭仍按原掃描)
-                    while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
-                        i += 1;
-                    }
-                    push(&mut toks, R0TokKind::Ident, s, i);
-                    continue;
-                }
-                // 掃描直到 " 後跟 #*hashes
-                let body_start = j + 1;
-                let mut k = body_start;
-                let mut closed = None;
-                while k < b.len() {
-                    if b[k] == b'"' {
-                        let mut h = 0;
-                        while k + 1 + h < b.len() && b[k + 1 + h] == b'#' {
-                            h += 1;
-                        }
-                        if h >= hashes {
-                            closed = Some(k + 1 + hashes);
-                            break;
-                        }
-                    }
-                    k += 1;
-                }
-                i = closed.unwrap_or(b.len());
-                push(&mut toks, R0TokKind::RawString, s, i);
-            }
-            b'A'..=b'Z' | b'a'..=b'z' | b'_' => {
-                while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
-                    i += 1;
-                }
-                let kind = match &src[s..i] {
-                    "fn" => R0TokKind::Fn,
-                    "struct" => R0TokKind::Struct,
-                    "let" => R0TokKind::Let,
-                    "mut" => R0TokKind::Mut,
-                    "if" => R0TokKind::If,
-                    "else" => R0TokKind::Else,
-                    "while" => R0TokKind::While,
-                    "loop" => R0TokKind::Loop,
-                    "return" => R0TokKind::Return,
-                    "true" => R0TokKind::True,
-                    "false" => R0TokKind::False,
-                    _ => R0TokKind::Ident,
-                };
-                push(&mut toks, kind, s, i);
-            }
-            b'&' => {
-                i += 1;
-                if i < b.len() && b[i] == b'&' {
-                    i += 1;
-                    push(&mut toks, R0TokKind::AndAnd, s, i);
-                } else if i + 3 < b.len() && &src[i..i + 3] == "mut" {
-                    i += 3;
-                    push(&mut toks, R0TokKind::AmpMut, s, i);
-                } else {
-                    push(&mut toks, R0TokKind::Amp, s, i);
-                }
-            }
-            b'|' => {
-                i += 1;
-                if i < b.len() && b[i] == b'|' {
-                    i += 1;
-                    push(&mut toks, R0TokKind::OrOr, s, i);
-                } else {
-                    push(&mut toks, R0TokKind::Bad, s, i); // 單豎線 = 閉包語法 → unsupported
-                }
-            }
-            b'*' => {
-                i += 1;
-                push(&mut toks, R0TokKind::Star, s, i);
-            }
-            b'+' => {
-                i += 1;
-                push(&mut toks, R0TokKind::Plus, s, i);
-            }
-            b'-' => {
-                i += 1;
-                if i < b.len() && b[i] == b'>' {
-                    i += 1;
-                    push(&mut toks, R0TokKind::Arrow, s, i);
-                } else {
-                    push(&mut toks, R0TokKind::Minus, s, i);
-                }
-            }
-            b'/' => {
-                i += 1;
-                push(&mut toks, R0TokKind::Slash, s, i);
-            }
-            b'%' => {
-                i += 1;
-                push(&mut toks, R0TokKind::Percent, s, i);
-            }
-            b'=' => {
-                i += 1;
-                if i < b.len() && b[i] == b'=' {
-                    i += 1;
-                    push(&mut toks, R0TokKind::EqEq, s, i);
-                } else {
-                    push(&mut toks, R0TokKind::Eq, s, i);
-                }
-            }
-            b'!' => {
-                i += 1;
-                if i < b.len() && b[i] == b'=' {
-                    i += 1;
-                    push(&mut toks, R0TokKind::NotEq, s, i);
-                } else {
-                    push(&mut toks, R0TokKind::Not, s, i); // 宏 / 否定
-                }
-            }
-            b'<' => {
-                i += 1;
-                if i < b.len() && b[i] == b'=' {
-                    i += 1;
-                    push(&mut toks, R0TokKind::Le, s, i);
-                } else if i < b.len() && b[i] == b'<' {
-                    i += 1;
-                    push(&mut toks, R0TokKind::Bad, s, i); // << / Shl:不在 R₀
-                } else {
-                    push(&mut toks, R0TokKind::Lt, s, i);
-                }
-            }
-            b'>' => {
-                i += 1;
-                if i < b.len() && b[i] == b'=' {
-                    i += 1;
-                    push(&mut toks, R0TokKind::Ge, s, i);
-                } else {
-                    push(&mut toks, R0TokKind::Gt, s, i);
-                }
-            }
-            b'.' => {
-                i += 1;
-                push(&mut toks, R0TokKind::Dot, s, i);
-            }
-            b';' => {
-                i += 1;
-                push(&mut toks, R0TokKind::Semi, s, i);
-            }
-            b':' => {
-                i += 1;
-                push(&mut toks, R0TokKind::Colon, s, i);
-            }
-            b',' => {
-                i += 1;
-                push(&mut toks, R0TokKind::Comma, s, i);
-            }
-            b'(' => {
-                i += 1;
-                push(&mut toks, R0TokKind::LParen, s, i);
-            }
-            b')' => {
-                i += 1;
-                push(&mut toks, R0TokKind::RParen, s, i);
-            }
-            b'{' => {
-                i += 1;
-                push(&mut toks, R0TokKind::LBrace, s, i);
-            }
-            b'}' => {
-                i += 1;
-                push(&mut toks, R0TokKind::RBrace, s, i);
-            }
-            b'[' => {
-                i += 1;
-                push(&mut toks, R0TokKind::LBrack, s, i);
-            }
-            b']' => {
-                i += 1;
-                push(&mut toks, R0TokKind::RBrack, s, i);
-            }
-            _ => {
-                let ch = src[i..].chars().next().unwrap();
-                i += ch.len_utf8();
-                push(&mut toks, R0TokKind::Bad, s, i);
-            }
-        }
-    }
-    toks
-}
-
-/// R₀ 詞法平鋪不變量(與 CL0 相同紀律)。
-pub fn r0_lexical_invariants(src: &str) -> Result<(), String> {
-    let toks = r0_lex(src);
-    let mut expected = 0u32;
-    for t in &toks {
-        if t.span.start != expected {
-            return Err(format!("r0 lexer gap at {}", expected));
-        }
-        expected = t.span.end;
-    }
-    if expected != src.len() as u32 {
-        return Err(format!("r0 lexer coverage {} != {}", expected, src.len()));
-    }
-    Ok(())
-}
-
-/// 越界構造掃描:返回所有被側條件排除的構造(如實申報,不假裝覆蓋)。
-/// 返回 (構造名, 出現的字節區間)。
-pub fn unsupported(src: &str) -> Vec<(&'static str, Span)> {
-    let toks = r0_lex(src);
-    let mut out = Vec::new();
-    for w in [
-        ("macro", "macro_rules"),
-        ("trait", "trait"),
-        ("impl", "impl"),
-        ("use", "use"),
-        ("mod", "mod"),
-        ("pub", "pub"),
-        ("unsafe", "unsafe"),
-        ("async", "async"),
-        ("match", "match"),
-        ("fn 泛型", "fn "), /* 佔位 */
-    ] {
-        let _ = w;
-    }
-    // 詞法級:關鍵字與符號
-    let mut i = 0;
-    while i < toks.len() {
-        let t = &toks[i];
-        match t.kind {
-            R0TokKind::Ident if i + 1 < toks.len() && toks[i + 1].span.start == t.span.end => {
-                // 直接相連的 ident(token 已按最長匹配,這裡是關鍵字檢查的替代路徑)
-            }
-            R0TokKind::Not => out.push(("宏/否定 `!`(宏語法)", t.span)),
-            R0TokKind::Bad => out.push(("非法符號(閉包 `|` 或 `<<` 等)", t.span)),
-            _ => {}
-        }
-        i += 1;
-    }
-    // 詞級關鍵字
-    for kw in [
-        "trait",
-        "impl",
-        "use",
-        "mod",
-        "pub",
-        "unsafe",
-        "async",
-        "match",
-        "macro_rules",
-        "dyn",
-        "enum",
-        "type",
-        "static",
-        "const",
-        "extern",
-        "where",
-    ] {
-        let mut from = 0;
-        while let Some(pos) = src[from..].find(kw) {
-            let start = from + pos;
-            let end = start + kw.len();
-            // 必須是獨立詞(兩側為邊界)
-            let before_ok =
-                start == 0 || !src[..start].ends_with(|c: char| c.is_alphanumeric() || c == '_');
-            let after = src[end..].chars().next();
-            let after_ok =
-                after.is_none() || !after.unwrap().is_alphanumeric() && after.unwrap() != '_';
-            if before_ok && after_ok {
-                out.push((
-                    match kw {
-                        "trait" => "trait 項(排除)",
-                        "impl" => "impl 塊(排除)",
-                        "use" => "use 項(排除)",
-                        "mod" => "mod 項(排除)",
-                        "pub" => "可見性(pub,排除)",
-                        "unsafe" => "unsafe(排除)",
-                        "async" => "async(排除)",
-                        "match" => "match 模式(排除)",
-                        "macro_rules" => "macro_rules(排除)",
-                        "enum" => "enum 項(排除)",
-                        "type" => "type 項(排除)",
-                        "static" => "static(排除)",
-                        "const" => "const(排除)",
-                        "extern" => "extern(排除)",
-                        "where" => "where(排除)",
-                        _ => "dyn(排除)",
-                    },
-                    Span::new(start as u32, end as u32),
-                ));
-            }
-            from = end;
-        }
-    }
-    // 生命週期 `'a`(raw string 內部除外 —— raw string 已整體成為 RawString token,故無誤報)
-    let mut from = 0;
-    let bytes = src.as_bytes();
-    while from < bytes.len() {
-        if bytes[from] == b'\''
-            && from + 1 < bytes.len()
-            && (bytes[from + 1].is_ascii_alphabetic() || bytes[from + 1] == b'_')
-        {
-            out.push((
-                "生命週期 `'a`(排除)",
-                Span::new(from as u32, (from + 2) as u32),
-            ));
-            from += 2;
-            continue;
-        }
-        from += 1;
-    }
-    out.sort_by_key(|(_, sp)| sp.start);
-    out.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
-    out
-}
-
-/// LALR(1)-乾淨片段斷言:檢查是否出現會引入歧義的構造
-/// (泛型實參 `<T>` 前的 ident、`<<`、`>` 後的 `(` 等 —— 本子集內由側條件全部排除)。
-pub fn lalr1_clean(src: &str) -> Result<(), String> {
-    let toks = r0_lex(src);
-    let mut structs: Vec<R0TokKind> = vec![];
-    for t in &toks {
-        if t.kind == R0TokKind::Bad {
-            return Err(format!("歧義/越界符號 @ {:?}", t.span));
-        }
-        if t.kind == R0TokKind::Not {
-            return Err(format!("`!`(宏語法,歧義) @ {:?}", t.span));
-        }
-        structs.push(t.kind);
-    }
-    // 泛型實參模式:IDENT `<` IDENT(排除比較的判據在真實語法中需要 2 個 lookahead)
-    for w in structs.windows(3) {
-        if w[0] == R0TokKind::Ident && w[1] == R0TokKind::Lt && w[2] == R0TokKind::Ident {
-            return Err("概型實參 vs 比較的歧義(側條件排除:無泛型)".to_string());
-        }
-    }
-    Ok(())
-}
-
+# -*- coding: utf-8 -*-
+# 在 src/r0.rs 的 #[cfg(test)] 之前插入 r0_parse(R₀ 完整解析器:CST + 節點級 unsupported)
+CODE = r'''
 // ===========================================================================
 // r0_parse —— R₀ 完整解析器(附錄 B EBNF → 表面語法樹)
 // ===========================================================================
@@ -543,9 +13,8 @@ pub fn lalr1_clean(src: &str) -> Result<(), String> {
 //     生命週期、泛型實參歧義 IDENT<IDENT)以 **節點級** Unsupported 如實申報
 //     (note + span),而非假裝覆蓋 —— 對應 legacy 掃描器 `unsupported` 的結構化升級。
 
-/// R₀ 解析引擎的遞歸極限(機器界的如實申報;R₀ 的優先級語法鏈約 15 幀/層,
-/// 故界取 64 以保證 2MB 線程棧內如實觸發而非溢出;CL0 為 256)。
-pub const R0_RECURSION_LIMIT: usize = 64;
+/// R₀ 解析引擎的遞歸極限(機器界的如實申報;與 CL0' 的 RECURSION_LIMIT 同界)。
+pub const R0_RECURSION_LIMIT: usize = 256;
 
 /// R₀ 解析器的失敗報告(僅兩種:語法層與引擎界)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -595,93 +64,49 @@ pub enum R0Kind {
     /// 語法失敗的封存區(§2.3 全化):吞至語句/項邊界,一語句一原子錯誤區。
     Error,
     // —— 匿名(anonymous,token 行)——
-    /// 關鍵字 `fn`。
     FnKw,
-    /// 關鍵字 `struct`。
     StructKw,
-    /// 關鍵字 `let`。
     LetKw,
-    /// 關鍵字 `mut`。
     MutKw,
-    /// 關鍵字 `if`。
     IfKw,
-    /// 關鍵字 `else`。
     ElseKw,
-    /// 關鍵字 `while`。
     WhileKw,
-    /// 關鍵字 `loop`。
     LoopKw,
-    /// 關鍵字 `return`。
     ReturnKw,
-    /// 字面量 `true`。
     TrueKw,
-    /// 字面量 `false`。
     FalseKw,
-    /// `&`(共享借用)。
     Amp,
-    /// `&mut`(可變借用)。
     AmpMut,
-    /// `*`(解引用/乘法)。
     Star,
-    /// `+`。
     Plus,
-    /// `-`。
     Minus,
-    /// `=`(賦值/綁定)。
     Eq,
-    /// `==`。
     EqEq,
-    /// `!=`。
     NotEq,
-    /// `<`。
     Lt,
-    /// `<=`。
     Le,
-    /// `>`。
     Gt,
-    /// `>=`。
     Ge,
-    /// `&&`。
     AndAnd,
-    /// `||`。
     OrOr,
-    /// `!`(邏輯非/宏)。
     Not,
-    /// `.`(字段訪問)。
     Dot,
-    /// `;`。
     Semi,
-    /// `:`(型別標註)。
     Colon,
-    /// `,`。
     Comma,
-    /// `(`。
     LParen,
-    /// `)`。
     RParen,
-    /// `{`。
     LBrace,
-    /// `}`。
     RBrace,
-    /// `[`(索引左界)。
     LBrack,
-    /// `]`(索引右界)。
     RBrack,
-    /// `->`(返回型別)。
     Arrow,
-    /// `/`(整除)。
     Slash,
-    /// `%`(取模)。
     Percent,
-    /// 識別字。
     Ident,
-    /// 數字字面量。
     Number,
-    /// raw string 字面量 `r#"…"#`(詞法面板式項)。
     RawString,
-    /// 空白/註釋(平鋪保留,不進結構)。
     Trivia,
-    /// 詞法級壞符號(平鋪保留 ⇒ 全化)。
     Bad,
 }
 
@@ -983,26 +408,12 @@ impl R0Tree {
 
 /// item-起始位置的排除關鍵字(§9 側條件;與 legacy `unsupported` 掃描同集)。
 const EXCLUDED_ITEM_KWS: &[&str] = &[
-    "trait",
-    "impl",
-    "use",
-    "mod",
-    "pub",
-    "unsafe",
-    "async",
-    "match",
-    "macro_rules",
-    "dyn",
-    "enum",
-    "type",
-    "static",
-    "const",
-    "extern",
-    "where",
+    "trait", "impl", "use", "mod", "pub", "unsafe", "async", "match", "macro_rules", "dyn",
+    "enum", "type", "static", "const", "extern", "where",
 ];
 
 fn is_excluded_item_kw(w: &str) -> bool {
-    EXCLUDED_ITEM_KWS.contains(&w)
+    EXCLUDED_ITEM_KWS.iter().any(|k| *k == w)
 }
 
 fn tok_kind(t: R0TokKind) -> R0Kind {
@@ -1061,15 +472,12 @@ enum Absorb {
     Stmt,
     /// 止於下一個 `fn` / `struct` / 排除關鍵字(不入,且僅在深度 0)。
     Item,
-    /// 宏調用的參數組 `!(...)` / `!{...}`:吞至配對右界(深度 0 處),不吃 `;`。
-    Macro,
 }
 
 impl Absorb {
     fn stop_before(self, k: R0TokKind, kw_of_ident: Option<&str>) -> bool {
         match self {
             Absorb::Stmt => k == R0TokKind::RBrace,
-            Absorb::Macro => matches!(k, R0TokKind::RBrace | R0TokKind::Semi),
             Absorb::Item => {
                 k == R0TokKind::Fn
                     || k == R0TokKind::Struct
@@ -1080,7 +488,6 @@ impl Absorb {
     fn stop_after(self, k: R0TokKind) -> bool {
         match self {
             Absorb::Stmt => k == R0TokKind::Semi,
-            Absorb::Macro => matches!(k, R0TokKind::RParen | R0TokKind::RBrace),
             Absorb::Item => false,
         }
     }
@@ -1097,9 +504,7 @@ struct R0Parser {
 }
 
 impl R0Parser {
-    /// 下一個 token 的種類(**trivia 感知**:先吸附前導 trivia 到棧頂)。
-    fn cur_kind(&mut self) -> Option<R0TokKind> {
-        self.skip_trivia();
+    fn cur_kind(&self) -> Option<R0TokKind> {
         self.toks.get(self.pos).map(|t| t.kind)
     }
     fn cur_span(&self) -> Option<Span> {
@@ -1107,6 +512,9 @@ impl R0Parser {
     }
     fn peek2_kind(&self) -> Option<R0TokKind> {
         self.toks.get(self.pos + 1).map(|t| t.kind)
+    }
+    fn peek3_kind(&self) -> Option<R0TokKind> {
+        self.toks.get(self.pos + 2).map(|t| t.kind)
     }
     fn text(&self, sp: Span) -> &str {
         &self.src[sp.start as usize..sp.end as usize]
@@ -1133,8 +541,8 @@ impl R0Parser {
     }
 
     fn skip_trivia(&mut self) {
-        while self.toks.get(self.pos).map(|t| t.kind) == Some(R0TokKind::Trivia) {
-            let sp = self.toks[self.pos].span;
+        while self.cur_kind() == Some(R0TokKind::Trivia) {
+            let sp = self.cur_span().unwrap();
             self.leaf(R0Kind::Trivia, sp);
             self.pos += 1;
         }
@@ -1162,10 +570,7 @@ impl R0Parser {
         let span = if kind == R0Kind::Root {
             Span::new(0, self.src.len() as u32)
         } else {
-            Span {
-                start: u32::MAX,
-                end: 0,
-            }
+            Span { start: u32::MAX, end: 0 }
         };
         self.nodes.push(R0Node {
             kind,
@@ -1201,7 +606,7 @@ impl R0Parser {
         } else {
             let p = self
                 .cur_span()
-                .map(|sp| sp.start)
+                .map(|t| t.span.start)
                 .unwrap_or(self.src.len() as u32);
             self.nodes[id as usize].span = Span::new(p, p);
         }
@@ -1251,7 +656,7 @@ impl R0Parser {
         let mut pd = 0i32;
         while let Some(k) = self.cur_kind() {
             let ident_kw = if k == R0TokKind::Ident {
-                self.cur_text().filter(|w| is_excluded_item_kw(w))
+                self.cur_text().filter(|w| is_excluded_item_kw(*w))
             } else {
                 None
             };
@@ -1275,30 +680,11 @@ impl R0Parser {
     }
 
     /// 一個語句 = 一個原子錯誤區(轉換 + 吸收,不分裂)。
-    ///
-    /// 特殊化:若失敗點停在 Bad token(閉包 `|` / 生命週期 `'` / 屬性 `#`),
-    /// 語句升級為 **Unsupported**(§9 如實申報),而非純 Error。
     fn stmt_err(&mut self, frame: usize, id: u32) {
-        let note = if self.cur_kind() == Some(R0TokKind::Bad) {
-            Some(self.bad_note())
-        } else {
-            None
-        };
-        self.set_kind(
-            id,
-            if note.is_some() {
-                R0Kind::Unsupported
-            } else {
-                R0Kind::Error
-            },
-        );
-        if let Some(n) = note {
-            self.set_note(id, n);
-        }
+        self.set_kind(id, R0Kind::Error);
         while self.stack.len() > frame + 1 {
-            let sid = self.stack.pop().unwrap();
+            self.stack.pop();
             self.depth -= 1;
-            self.finalize(sid);
         }
         self.absorb_to(Absorb::Stmt);
         self.unwind_to(frame);
@@ -1308,9 +694,8 @@ impl R0Parser {
     fn item_err(&mut self, frame: usize, id: u32) {
         self.set_kind(id, R0Kind::Error);
         while self.stack.len() > frame + 1 {
-            let sid = self.stack.pop().unwrap();
+            self.stack.pop();
             self.depth -= 1;
-            self.finalize(sid);
         }
         self.absorb_to(Absorb::Item);
         self.unwind_to(frame);
@@ -1326,15 +711,20 @@ impl R0Parser {
                 None => break,
                 Some(R0TokKind::Fn) => self.parse_fn_item()?,
                 Some(R0TokKind::Struct) => self.parse_struct_item()?,
-                Some(R0TokKind::Ident) if self.cur_text().is_some_and(is_excluded_item_kw) => {
-                    self.unsupported_item()?
+                Some(R0TokKind::Ident)
+                    if self.cur_text().is_some_and(is_excluded_item_kw) =>
+                {
+                    self.unsupported_item()
                 }
                 _ => {
                     // 項層級的雜散 token:一項一錯誤區,吸收至下一項邊界。
                     let id = self.open(R0Kind::Error)?;
                     self.absorb_to(Absorb::Item);
-                    self.close();
+                    self.unwind_to(self.stack.len());
                     let _ = id;
+                    // absorb 後棧頂回到 Root 之上;關閉 Error 節點本身:
+                    // open 已把它掛為 Root 的子節點,此處只需定稿。
+                    self.finalize(id);
                 }
             }
         }
@@ -1357,10 +747,7 @@ impl R0Parser {
             return Ok(());
         }
         self.bump(R0Kind::LParen)?;
-        if let Err(R0ParseIssue::Syntax) = self.parse_params() {
-            self.item_err(frame, id);
-            return Ok(());
-        }
+        self.parse_params()?;
         if self.cur_kind() != Some(R0TokKind::RParen) {
             self.item_err(frame, id);
             return Ok(());
@@ -1394,12 +781,7 @@ impl R0Parser {
                     self.bump(R0Kind::Ident)?;
                     if self.cur_kind() == Some(R0TokKind::Colon) {
                         self.bump(R0Kind::Colon)?;
-                        // 型別失敗 → 整個參數表由調用方(item_err)收場。
-                        // 直接記 Err 而不在這裡轉換(由 parse_fn_item 統一處理)。
-                        if let Err(R0ParseIssue::Syntax) = self.parse_type() {
-                            self.set_kind(id, R0Kind::Error);
-                            return Err(R0ParseIssue::Syntax);
-                        }
+                        self.parse_type()?;
                     }
                     self.close();
                     let _ = id;
@@ -1447,14 +829,7 @@ impl R0Parser {
                         return Ok(());
                     }
                     self.bump(R0Kind::Colon)?;
-                    match self.parse_type() {
-                        Ok(()) => {}
-                        Err(R0ParseIssue::Depth) => return Err(R0ParseIssue::Depth),
-                        Err(R0ParseIssue::Syntax) => {
-                            self.item_err(frame, id);
-                            return Ok(());
-                        }
-                    }
+                    self.parse_type()?;
                     self.close();
                     let _ = fid;
                 }
@@ -1492,18 +867,6 @@ impl R0Parser {
                 }
                 self.bump(R0Kind::RBrack)?;
             }
-            Some(R0TokKind::Bad) => {
-                // 詞法級側條件(生命週期 `'a` / 屬性 `#` 等,§9):節點級 Unsupported,
-                // 吃掉 token 後按 `&'a T` / `[T; 'a]` 形式繼續解析基礎型別。
-                let note = self.bad_note();
-                let uid = self.open(R0Kind::Unsupported)?;
-                self.set_note(uid, note);
-                let sp = self.cur_span().unwrap();
-                self.leaf(R0Kind::Bad, sp);
-                self.pos += 1;
-                self.close();
-                self.parse_type()?;
-            }
             _ => return Err(R0ParseIssue::Syntax),
         }
         self.close();
@@ -1540,12 +903,17 @@ impl R0Parser {
             Some(R0TokKind::While) => self.parse_while(frame),
             Some(R0TokKind::Loop) => self.parse_loop(frame),
             Some(R0TokKind::Bad) => {
-                let note = self.bad_note();
-                self.unsupported_wrap(note, Absorb::Stmt)?;
+                let id = self.open(R0Kind::Unsupported)?;
+                self.set_note(id, self.bad_note());
+                self.absorb_to(Absorb::Stmt);
+                self.close();
                 Ok(())
             }
             Some(R0TokKind::Ident) if self.cur_text() == Some("match") => {
-                self.unsupported_wrap("match 模式(排除)", Absorb::Stmt)?;
+                let id = self.open(R0Kind::Unsupported)?;
+                self.set_note(id, "match 模式(排除)");
+                self.absorb_to(Absorb::Stmt);
+                self.close();
                 Ok(())
             }
             _ => {
@@ -1554,27 +922,19 @@ impl R0Parser {
                     self.stmt_err(frame, id);
                     return Ok(());
                 }
-                let eid = match self.parse_expr() {
-                    Ok(e) => e,
+                match self.parse_expr() {
+                    Ok(()) => {}
                     Err(R0ParseIssue::Depth) => return Err(R0ParseIssue::Depth),
                     Err(R0ParseIssue::Syntax) => {
                         self.stmt_err(frame, id);
                         return Ok(());
                     }
-                };
-                if self.cur_kind() != Some(R0TokKind::Semi) {
-                    // 塊表達式語句可省略 `;`(Rust 語義;CL0 生成器亦用之)。
-                    let is_block_stmt = self.nodes[eid as usize]
-                        .children
-                        .first()
-                        .is_some_and(|&c| self.nodes[c as usize].kind == R0Kind::Block);
-                    if !is_block_stmt {
-                        self.stmt_err(frame, id);
-                        return Ok(());
-                    }
-                } else {
-                    self.bump(R0Kind::Semi)?;
                 }
+                if self.cur_kind() != Some(R0TokKind::Semi) {
+                    self.stmt_err(frame, id);
+                    return Ok(());
+                }
+                self.bump(R0Kind::Semi)?;
                 self.close();
                 Ok(())
             }
@@ -1606,7 +966,7 @@ impl R0Parser {
                 return Ok(());
             }
             match self.parse_expr() {
-                Ok(_) => {}
+                Ok(()) => {}
                 Err(R0ParseIssue::Depth) => return Err(R0ParseIssue::Depth),
                 Err(R0ParseIssue::Syntax) => {
                     self.stmt_err(frame, id);
@@ -1628,7 +988,7 @@ impl R0Parser {
         self.bump(R0Kind::ReturnKw)?;
         if self.expr_start() {
             match self.parse_expr() {
-                Ok(_) => {}
+                Ok(()) => {}
                 Err(R0ParseIssue::Depth) => return Err(R0ParseIssue::Depth),
                 Err(R0ParseIssue::Syntax) => {
                     self.stmt_err(frame, id);
@@ -1653,7 +1013,7 @@ impl R0Parser {
             return Ok(());
         }
         match self.parse_expr() {
-            Ok(_) => {}
+            Ok(()) => {}
             Err(R0ParseIssue::Depth) => return Err(R0ParseIssue::Depth),
             Err(R0ParseIssue::Syntax) => {
                 self.stmt_err(frame, id);
@@ -1688,7 +1048,7 @@ impl R0Parser {
             return Ok(());
         }
         match self.parse_expr() {
-            Ok(_) => {}
+            Ok(()) => {}
             Err(R0ParseIssue::Depth) => return Err(R0ParseIssue::Depth),
             Err(R0ParseIssue::Syntax) => {
                 self.stmt_err(frame, id);
@@ -1716,7 +1076,7 @@ impl R0Parser {
         Ok(())
     }
 
-    fn expr_start(&mut self) -> bool {
+    fn expr_start(&self) -> bool {
         matches!(
             self.cur_kind(),
             Some(R0TokKind::Number)
@@ -1743,15 +1103,24 @@ impl R0Parser {
     }
 
     /// 側條件構造(unsupported)通用外殼:開節點 → 標注 → 吸收 → 關閉。
-    fn unsupported_wrap(&mut self, note: &'static str, mode: Absorb) -> Result<(), R0ParseIssue> {
-        let id = self.open(R0Kind::Unsupported)?;
+    fn unsupported_wrap(&mut self, note: &'static str, mode: Absorb) {
+        let id = self.open(R0Kind::Unsupported).unwrap_or_else(|_| {
+            // Depth:退而求其次,直接吞到邊界(機器界如實申報的上限)。
+            let id = self.nodes.len() as u32;
+            self.nodes.push(R0Node {
+                kind: R0Kind::Error,
+                span: Span::new(0, 0),
+                children: Vec::new(),
+                note: Some("(深度界)"),
+            });
+            id
+        });
         self.set_note(id, note);
         self.absorb_to(mode);
         self.close();
-        Ok(())
     }
 
-    fn unsupported_item(&mut self) -> Result<(), R0ParseIssue> {
+    fn unsupported_item(&mut self) {
         let note = match self.cur_text() {
             Some("match") => "match 模式(排除)",
             Some(w) => {
@@ -1762,18 +1131,7 @@ impl R0Parser {
             }
             None => "排除項",
         };
-        // 先吞關鍵字本身,再吸收殘骸(否則 Item 模式的 stop_before 會停在
-        // 自己身上,程序循環對同一 token 無限重發)。
-        let id = self.open(R0Kind::Unsupported)?;
-        self.set_note(id, note);
-        if let Some(k) = self.cur_kind() {
-            let sp = self.cur_span().unwrap();
-            self.leaf(tok_kind(k), sp);
-            self.pos += 1;
-        }
-        self.absorb_to(Absorb::Item);
-        self.close();
-        Ok(())
+        self.unsupported_wrap(note, Absorb::Item);
     }
 
     /// 泛型實參歧義 IDENT `<` IDENT …(與 lalr1_clean 同判據)。
@@ -1807,11 +1165,12 @@ impl R0Parser {
 
     // ---------- 表達式(單節點扁平衡;構造順序即優先級)----------
 
-    fn parse_expr(&mut self) -> Result<u32, R0ParseIssue> {
+    fn parse_expr(&mut self) -> Result<(), R0ParseIssue> {
         let id = self.open(R0Kind::Expr)?;
         self.parse_assign_body()?;
         self.close();
-        Ok(id)
+        let _ = id;
+        Ok(())
     }
 
     fn parse_assign_body(&mut self) -> Result<(), R0ParseIssue> {
@@ -1825,8 +1184,8 @@ impl R0Parser {
 
     fn parse_or_body(&mut self) -> Result<(), R0ParseIssue> {
         self.parse_and_body()?;
-        while self.cur_kind() == Some(R0TokKind::OrOr) {
-            self.bump(R0Kind::OrOr)?;
+        while self.cur_kind() == Some(R0TokKind::AndAnd) {
+            self.bump(R0Kind::AndAnd)?;
             self.parse_and_body()?;
         }
         Ok(())
@@ -1834,8 +1193,13 @@ impl R0Parser {
 
     fn parse_and_body(&mut self) -> Result<(), R0ParseIssue> {
         self.parse_eq_body()?;
-        while self.cur_kind() == Some(R0TokKind::AndAnd) {
-            self.bump(R0Kind::AndAnd)?;
+        while self.cur_kind() == Some(R0TokKind::EqEq) || self.cur_kind() == Some(R0TokKind::NotEq) {
+            let k = if self.cur_kind() == Some(R0TokKind::EqEq) {
+                R0Kind::EqEq
+            } else {
+                R0Kind::NotEq
+            };
+            self.bump(k)?;
             self.parse_eq_body()?;
         }
         Ok(())
@@ -1843,21 +1207,6 @@ impl R0Parser {
 
     fn parse_eq_body(&mut self) -> Result<(), R0ParseIssue> {
         self.parse_rel_body()?;
-        while self.cur_kind() == Some(R0TokKind::EqEq) || self.cur_kind() == Some(R0TokKind::NotEq)
-        {
-            let k = if self.cur_kind() == Some(R0TokKind::EqEq) {
-                R0Kind::EqEq
-            } else {
-                R0Kind::NotEq
-            };
-            self.bump(k)?;
-            self.parse_rel_body()?;
-        }
-        Ok(())
-    }
-
-    fn parse_rel_body(&mut self) -> Result<(), R0ParseIssue> {
-        self.parse_add_body()?;
         while matches!(
             self.cur_kind(),
             Some(R0TokKind::Lt) | Some(R0TokKind::Le) | Some(R0TokKind::Gt) | Some(R0TokKind::Ge)
@@ -1869,6 +1218,20 @@ impl R0Parser {
                 _ => R0Kind::Ge,
             };
             self.bump(k)?;
+            self.parse_rel_body()?;
+        }
+        Ok(())
+    }
+
+    fn parse_rel_body(&mut self) -> Result<(), R0ParseIssue> {
+        self.parse_add_body()?;
+        while matches!(self.cur_kind(), Some(R0TokKind::Plus) | Some(R0TokKind::Minus)) {
+            let k = if self.cur_kind() == Some(R0TokKind::Plus) {
+                R0Kind::Plus
+            } else {
+                R0Kind::Minus
+            };
+            self.bump(k)?;
             self.parse_add_body()?;
         }
         Ok(())
@@ -1876,23 +1239,6 @@ impl R0Parser {
 
     fn parse_add_body(&mut self) -> Result<(), R0ParseIssue> {
         self.parse_mul_body()?;
-        while matches!(
-            self.cur_kind(),
-            Some(R0TokKind::Plus) | Some(R0TokKind::Minus)
-        ) {
-            let k = if self.cur_kind() == Some(R0TokKind::Plus) {
-                R0Kind::Plus
-            } else {
-                R0Kind::Minus
-            };
-            self.bump(k)?;
-            self.parse_mul_body()?;
-        }
-        Ok(())
-    }
-
-    fn parse_mul_body(&mut self) -> Result<(), R0ParseIssue> {
-        self.parse_unary()?;
         while matches!(
             self.cur_kind(),
             Some(R0TokKind::Star) | Some(R0TokKind::Slash) | Some(R0TokKind::Percent)
@@ -1903,16 +1249,19 @@ impl R0Parser {
                 _ => R0Kind::Percent,
             };
             self.bump(k)?;
-            self.parse_unary()?;
+            self.parse_mul_body()?;
         }
+        Ok(())
+    }
+
+    fn parse_mul_body(&mut self) -> Result<(), R0ParseIssue> {
+        self.parse_unary()?;
         Ok(())
     }
 
     fn parse_unary(&mut self) -> Result<(), R0ParseIssue> {
         match self.cur_kind() {
-            Some(R0TokKind::Amp)
-            | Some(R0TokKind::AmpMut)
-            | Some(R0TokKind::Star)
+            Some(R0TokKind::Amp) | Some(R0TokKind::AmpMut) | Some(R0TokKind::Star)
             | Some(R0TokKind::Not) => {
                 let id = self.open(R0Kind::UnaryExpr)?;
                 let k = match self.cur_kind().unwrap() {
@@ -1944,7 +1293,7 @@ impl R0Parser {
                 }
                 Some(R0TokKind::LBrack) => {
                     self.bump(R0Kind::LBrack)?;
-                    let _ = self.parse_expr()?;
+                    self.parse_expr()?;
                     if self.cur_kind() != Some(R0TokKind::RBrack) {
                         return Err(R0ParseIssue::Syntax);
                     }
@@ -1953,10 +1302,12 @@ impl R0Parser {
                 Some(R0TokKind::LParen) => {
                     self.bump(R0Kind::LParen)?;
                     loop {
-                        if self.cur_kind() == Some(R0TokKind::RParen) || self.cur_kind().is_none() {
+                        if self.cur_kind() == Some(R0TokKind::RParen)
+                            || self.cur_kind() == Some(R0TokKind::None)
+                        {
                             break;
                         }
-                        let _ = self.parse_expr()?;
+                        self.parse_expr()?;
                         if self.cur_kind() == Some(R0TokKind::Comma) {
                             self.bump(R0Kind::Comma)?;
                         } else {
@@ -1970,7 +1321,7 @@ impl R0Parser {
                 }
                 Some(R0TokKind::Not) => {
                     // 宏調用 `foo!(…)`(側條件排除)。
-                    self.unsupported_wrap("宏調用 `!`(排除)", Absorb::Macro)?;
+                    self.unsupported_wrap("宏調用 `!`(排除)", Absorb::Stmt);
                 }
                 _ => break,
             }
@@ -2011,7 +1362,7 @@ impl R0Parser {
                 if self.cur_kind() == Some(R0TokKind::RParen) {
                     return Err(R0ParseIssue::Syntax);
                 }
-                let _ = self.parse_expr()?;
+                self.parse_expr()?;
                 if self.cur_kind() != Some(R0TokKind::RParen) {
                     return Err(R0ParseIssue::Syntax);
                 }
@@ -2047,197 +1398,68 @@ pub fn r0_parse(src: &str) -> Result<R0Tree, R0ParseIssue> {
         nodes: p.nodes,
     })
 }
+'''
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn r0_lex_tiling() {
-        for src in [
-            "fn main() { let x = 1; }",
-            "let s = r#\"he\"llo\"#;",
-            "let t = r##\"x\"##;",
-            "struct P { a: int, b: &mut int }",
-            "x > y && z != 3",
-            "@@|",
-        ] {
-            r0_lexical_invariants(src).unwrap_or_else(|e| panic!("{:?}: {}", src, e));
-        }
-    }
-
-    #[test]
-    fn r0_unsupported_detects() {
-        let src = "fn main() { let x = |a| a; match x { _ => {} } let y: &'a int = &1; }";
-        let u = unsupported(src);
-        let kinds: Vec<&str> = u.iter().map(|(k, _)| *k).collect();
-        assert!(
-            kinds
-                .iter()
-                .any(|k| k.contains("閉包") || k.contains("macro")),
-            "closure must be detected, got {:?}",
-            kinds
-        );
-        assert!(
-            kinds.iter().any(|k| k.contains("match")),
-            "match must be detected, got {:?}",
-            kinds
-        );
-        assert!(
-            kinds.iter().any(|k| k.contains("生命週期")),
-            "lifetime must be detected, got {:?}",
-            kinds
-        );
-    }
-
-    #[test]
-    fn r0_lalr1_clean_checks() {
-        // 合法 R₀ 片段:無歧義
-        assert!(lalr1_clean("fn main() { let x = 1 < 2; }").is_ok());
-        // 泛型實參模式:被標記
-        assert!(lalr1_clean("let v: Vec<int> = v;").is_err());
-        // 宏:被標記
-        assert!(lalr1_clean("println!(x);").is_err());
-    }
-}
-
-#[test]
-fn r0_parse_legal_roundtrip() {
-    // 附錄 B 的全語法面:item / 語句 / 全部運算符優先級 / 借用 / 字段 / 索引 / 調用。
-    let src = r#"fn main() {
-  let mut x = 1;
-  let r = &mut x;
-  let y = x + 2 * 3 - 4 / 2 % 3;
-  let b = x < 1 || y >= 2 && x != 3;
-  x = y;
-  if x == 1 { f(x, y); } else { g(); }
-  while x < 10 { x = x + 1; }
-  loop { x = x + 1; }
-  return x;
-}
-struct P { a: int, b: &mut int, c: [int], }
-fn q(v: int, w: &int) -> int { let k: int = v; return k; }"#;
-    let t = r0_parse(src).expect("legal R0 must parse");
-    assert!(!t.has_error(), "legal program must have no ERROR node");
-    assert!(
-        t.unsupported_spans().is_empty(),
-        "legal program must have no Unsupported: {:?}",
-        t.unsupported_spans()
-    );
-    assert_eq!(t.unparse(), src, "byte-exact roundtrip");
-    assert!(t.validate_continuity().is_ok());
-    assert!(t.validate_tree_shapes().is_ok());
-    assert!(t.laminar_ok());
-    // 結構面:具名節點存在(函數/塊/語句/表達式)
-    assert!(
-        t.nodes.iter().any(|n| n.kind == R0Kind::FnItem),
-        "fn items present"
-    );
-    assert!(
-        t.nodes.iter().any(|n| n.kind == R0Kind::StructItem),
-        "struct item present"
-    );
-    assert!(
-        t.nodes.iter().any(|n| n.kind == R0Kind::IfStmt),
-        "if stmt present"
-    );
-    assert!(
-        t.nodes.iter().any(|n| n.kind == R0Kind::UnaryExpr),
-        "unary expr present"
-    );
-}
-
-#[test]
-fn r0_parse_garbage_totalization() {
-    // 總化:任何輸入(含非法字節 / 半截構造 / 亂語法)都產出樹,且樹可驗證性質成立。
-    let samples = [
-        "",
-        "@@|",
-        "fn",
-        "fn f(",
-        "fn f() { let x = ; }",
-        "fn f() { if x { } else }",
-        "struct S { a: }",
-        "fn f() { while { } }",
-        "let x = (1;",
-        "fn f() { & & & x; }",
-        "}}}",
-        "fn f() { let x = { { { 1; } }",
-        "\u{1}\u{2}\u{ff}\u{fe}",
-        "fn f() { let s = r#\"unterminated;",
-    ];
-    for src in samples {
-        let t = r0_parse(src)
-            .unwrap_or_else(|e| panic!("totalization violated for {:?}: {:?}", src, e));
-        assert!(t.total_nodes() >= 1);
-        assert!(
-            t.validate_continuity().is_ok(),
-            "continuity must hold on {:?}",
-            src
-        );
-        assert!(t.validate_tree_shapes().is_ok());
-        assert!(t.laminar_ok());
-        assert_eq!(t.unparse(), src, "roundtrip must hold on {:?}", src);
-    }
-}
-
-#[test]
-fn r0_parse_unsupported_nodes() {
-    // 節點級 unsupported(§9 如實申報:note + 精確 span,而非假裝覆蓋)。
-    let cases: &[(&str, &str)] = &[
-        ("fn f() { let c = |a| a; }", "閉包"),
-        ("fn f() { match x { _ => {} } }", "match"),
-        ("trait T { fn f(); }", "trait"),
-        ("fn f() { println!(x); }", "宏調用"),
-        ("fn f(x: &'a int) {}", "生命週期"),
-        ("fn f() { let v: Vec<int> = v; }", "泛型實參"),
-        ("fn f() { let a = @; }", "非法符號"),
-    ];
-    for (src, needle) in cases {
-        let t = r0_parse(src).expect("unsupported constructs still parse (totalization)");
-        let notes = t.unsupported_spans();
-        assert!(
-            notes.iter().any(|(_, n)| n.contains(*needle)),
-            "case {:?}: expected note containing {:?}, got {:?}",
-            src,
-            needle,
-            notes
-        );
-        assert!(t.validate_continuity().is_ok());
-        assert_eq!(t.unparse(), *src);
-    }
-}
-
-#[test]
-fn r0_parse_depth_honest() {
-    // 深嵌套越界:如實申報 Err(Depth),永不 panic。
-    let deep = format!("fn main() {{ let x = {}1; }}", "{ ".repeat(100));
-    let r = r0_parse(&deep);
-    match r {
-        Err(R0ParseIssue::Depth) => {}
-        Ok(t) => assert!(t.has_error() || t.total_nodes() > 0),
-        Err(R0ParseIssue::Syntax) => panic!("Depth must be reported, not Syntax"),
-    }
-    // 正常深程式沒問題
-    let okdeep = format!("fn main() {{ {} }}", "{ x; }".repeat(60));
-    let t = r0_parse(&okdeep).expect("normal depth must parse");
-    assert!(t.total_nodes() > 100);
-    assert!(!t.has_error());
-}
-
-#[test]
-fn r0_parse_determinism_named_sexp() {
-    let src = "fn f() { let x = 1; return x; }";
-    let a = r0_parse(src).unwrap();
-    let b = r0_parse(src).unwrap();
-    assert_eq!(
-        a.named_sexp(),
-        b.named_sexp(),
-        "deterministic named projection"
-    );
-    assert!(
-        a.named_sexp().starts_with("(root(fn_item"),
-        "named sexp must be structural: {}",
-        a.named_sexp()
-    );
-}
+path = 'src/r0.rs'
+s = open(path, encoding='utf-8').read()
+marker = '#[cfg(test)]\nmod tests {'
+assert s.count(marker) == 1, s.count(marker)
+# 模組交付清單更新
+old_bullets = '''//!   4. `lalr1_clean(src)` —— LALR(1)-乾淨片段斷言(歧義構造不存在)。
+'''
+new_bullets = '''//!   4. `lalr1_clean(src)` —— LALR(1)-乾淨片段斷言(歧義構造不存在);
+//!   5. `r0_parse(src)` —— 附錄 B EBNF → 表面語法樹(連續性/樹公理/laminar/
+//!      無損回環 + 節點級 `unsupported` 申報,§9 如實申報的結構化形式)。
+'''
+assert s.count(old_bullets) == 1
+s = s.replace(old_bullets, new_bullets)
+# legacy 掃描關鍵字集擴充(與 EXCLUDED_ITEM_KWS 一致)
+old_kws = '''    for kw in [
+        "trait",
+        "impl",
+        "use",
+        "mod",
+        "pub",
+        "unsafe",
+        "async",
+        "match",
+        "macro_rules",
+        "dyn",
+    ] {'''
+new_kws = '''    for kw in [
+        "trait",
+        "impl",
+        "use",
+        "mod",
+        "pub",
+        "unsafe",
+        "async",
+        "match",
+        "macro_rules",
+        "dyn",
+        "enum",
+        "type",
+        "static",
+        "const",
+        "extern",
+        "where",
+    ] {'''
+assert s.count(old_kws) == 1
+s = s.replace(old_kws, new_kws)
+# 補 legacy 掃描的標簽對(新增關鍵字)
+old_tag = '''                        "macro_rules" => "macro_rules(排除)",
+                        _ => "dyn(排除)",'''
+new_tag = '''                        "macro_rules" => "macro_rules(排除)",
+                        "enum" => "enum 項(排除)",
+                        "type" => "type 項(排除)",
+                        "static" => "static(排除)",
+                        "const" => "const(排除)",
+                        "extern" => "extern(排除)",
+                        "where" => "where(排除)",
+                        _ => "dyn(排除)",'''
+assert s.count(old_tag) == 1
+s = s.replace(old_tag, new_tag)
+# 插入解析器主體
+s = s.replace(marker, CODE + '\n' + marker)
+open(path, 'w', encoding='utf-8').write(s)
+print('ok src/r0.rs inserted, lines =', s.count('\n'))

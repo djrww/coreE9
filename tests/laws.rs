@@ -240,6 +240,51 @@ fn test_law_L7b_structural_maximality() {
     }
 }
 
+#[test]
+fn test_law_L7_error_totalization() {
+    // L7 全化(附錄 §2.3):任意位元串輸入,CL0' 都回傳樹,永不 panic、
+    // 永不 Err;樹必層狀(laminar)、span 必連續(continuity)、形必合公理,
+    // 且 unparse 逐位元等價 —— 總化即「零丟失」。
+    // 覆蓋面(四源):(a) 合法程式全語法面;(b) 雙重垃圾檔案;(c) 半截合法檔案;
+    // (d) 近似隨機位元串(經 lossy 重編碼為合法 UTF-8,如實申報)。
+    let mut rng = Rng::new(53);
+    let mut samples: Vec<String> = Vec::new();
+
+    for _ in 0..200 {
+        samples.push(gen_legal(&mut rng));
+    }
+    for _ in 0..400 {
+        samples.push(gen_garbage(&mut rng, 200));
+    }
+    for _ in 0..200 {
+        let legal = gen_legal(&mut rng);
+        samples.push(gen_half_file(&mut rng, &legal));
+    }
+    for _ in 0..200 {
+        let len = rng.below(160) as usize;
+        let mut v = Vec::with_capacity(len);
+        for _ in 0..len {
+            v.push(rng.next_u64() as u8);
+        }
+        samples.push(String::from_utf8_lossy(&v).into_owned());
+    }
+
+    assert!(samples.len() >= 1000, "L7: coverage insufficient");
+    for src in &samples {
+        let t = parse(src).expect("L7 violated: parser must be total (never Err)");
+        assert!(
+            t.laminar_ok(),
+            "L7: laminar violated on {:?}…",
+            &src[..src.len().min(60)]
+        );
+        t.validate_continuity()
+            .unwrap_or_else(|e| panic!("L7: continuity violated: {}\nfor {:?}", e, src));
+        t.validate_tree_shapes()
+            .unwrap_or_else(|e| panic!("L7: tree axioms {} for {:?}", e, src));
+        assert_eq!(t.unparse(), *src, "L7: roundtrip (byte-exact) violated");
+    }
+}
+
 // ===========================================================================
 // L8 紅邊遞減:菜單每條規則嚴格遞減 μ(§4.2)
 // ===========================================================================

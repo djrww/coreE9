@@ -634,8 +634,9 @@ impl<'a> Parser<'a> {
     fn item_err(&mut self, frame: usize, id: NodeId) {
         self.set_error(id);
         while self.stack.len() > frame + 1 {
-            self.stack.pop();
+            let sid = self.stack.pop().unwrap();
             self.depth -= 1;
+            self.finalize(sid);
         }
         // 吸收至下一項(吞至下一個 `fn`)。
         self.absorb_to(SyncMode::Item);
@@ -764,8 +765,9 @@ impl<'a> Parser<'a> {
     fn stmt_err(&mut self, frame: usize, id: NodeId) {
         self.set_error(id);
         while self.stack.len() > frame + 1 {
-            self.stack.pop();
+            let sid = self.stack.pop().unwrap();
             self.depth -= 1;
+            self.finalize(sid);
         }
         // 吸收剩餘 token 進本語句的錯誤節點(吞至語句邊界)。
         self.absorb_to(SyncMode::Stmt);
