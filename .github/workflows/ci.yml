@@ -71,7 +71,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run hotpaths benchmark
-        run: cargo bench --bench hotpaths 2>&1 | tee target/bench.log
+        run: |
+          set -o pipefail
+          mkdir -p target
+          cargo bench --bench hotpaths 2>&1 | tee target/bench.log
 
       - name: Benchmark gate
         run: python3 tools/bench_gate.py target/bench.log bench/BASELINE.json --tol 0.25
