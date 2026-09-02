@@ -10,8 +10,8 @@
 
 | 維度 | 狀態 | 證據 |
 |---|---|---|
-| 代碼質量 | ✅ 全綠(迭代 2) | `cargo test` 46/46 · clippy `-D warnings` 0 · fmt clean · rustdoc missing_docs 0 · **coverage gate**(核心 ≥90%,ast ≥75%)· **bench gate**(hotpaths ±25%)|
-| 九律覆蓋 | ✅ 主體完成 | L1–L9 + M1/M2/M4/M5 + T2 + R₀ 語義面 + 反例縮小:46 具名測試(見 SPEC-TRACE §〇)|
+| 代碼質量 | ✅ 測試/靜態全綠;**⚠️ bench gate 在 main HEAD 紅** | `cargo test` **47/47**(迭代 3 新增 `test_law_L9b_parallel_moves_exact_swap`)· clippy `-D warnings` 0 · fmt clean · rustdoc `-D warnings` 0 · coverage gate ok(rep 90.6%)· **bench gate:本地重現 CI 之失敗(`laminar` ×1.26、`named_sexp` ×1.35 > +25%)⇒ 基線脆弱,見 `docs/HARD-ITEMS.md` §#5** |
+| 九律覆蓋 | ✅ 主體完成 | L1–L9 + M1/M2/M4/M5 + T2 + R₀ 語義面 + 反例縮小:**47 具名測試**(見 SPEC-TRACE §〇);L9b′ 平行的精確交換已入陣 |
 | R₀ 載體 | ⚠️ 部分 | 詞法 `r0_lex` + `lalr1_clean` + `unsupported` 齊;**缺完整 `r0_parse`(CST 樹產出)** |
 | 重寫系統 | ✅ 完整 | §4.2 良基測度 μ(L8)+ §4.3 臨界對/L9 Newman 通道(含 Naive 反例對照) |
 | 增量層 | ⚠️ 停滯 | `reparse`/`ReuseData`/`ReparseOut` 已實現;L3/L4 依規格約定**排除**在律級斷言外 |
@@ -58,7 +58,7 @@
 
 | # | 工作項 | 內容 | 工作量 |
 |---|---|---|---|
-| 12 | **形式化證明** | Lean/Coq/Rocq 重證核心:Newman 引理(現為測試級)、L7b 迭代淨化於切縫終止、T2 區間圖完美性;與 Rust 側對帳 | XL | **進行中(路線 A)**:`docs/ROCQ-PLAN.md`(計劃)+ `docs/ROCQ-TRACE.md`(對帳)。**Phase 0–2 ✅**(2026-09-02):鏡像(Mirror.v,D1–D6)+ 對帳框架(19 樣本點 kernel 複驗,抓出並修正 R4 runtime 順序分歧)+ 抽象 Newman(R1/R4)+ **具體 SN(R2:CommutativeTrim × Guarded 之 step_ct 強正規化,µ=|E_red|)**。**Phase 3(R3 具體 WCR → 任意狀態合流)下一步** |
+| 12 | **形式化證明** | Lean/Coq/Rocq 重證核心:Newman 引理(現為測試級)、L7b 迭代淨化於切縫終止、T2 區間圖完美性;與 Rust 側對帳 | XL | **進行中(路線 A)**:`docs/ROCQ-PLAN.md`(計劃)+ `docs/ROCQ-TRACE.md`(對帳)。**Phase 0–2 ✅**(2026-09-02):鏡像(Mirror.v,D1–D6)+ 對帳框架(19 樣本點 kernel 複驗,抓出並修正 R4 runtime 順序分歧)+ 抽象 Newman(R1/R4)+ **具體 SN(R2:CommutativeTrim × Guarded 之 step_ct 強正規化,µ=|E_red|)**。**Phase 3(R3 具體 WCR → 任意狀態合流)已開工前置完成(2026-09-02)**:文獻搜查 + 探針前測見 `docs/R3-RESEARCH.md`(精確交換在 2,443,506 對上全綠;Guarded≡Raw;紅邊單調),`docs/HARD-ITEMS.md` 為難度與驗收計劃 |
 | 13 | **定律語義化報告** | 把 fuzz 的統計型檢查升級為「生成式證明」:每輪記錄證人,匯出 `docs/REPORT.md` 機器可讀 | L | **已裁決(非 Rocq 前置)**:擱置;理由見 ROCQ-PLAN §5.1;極小版可排 Phase 5 後 |
 
 ---
@@ -68,8 +68,10 @@
 ```
 第一迭代 ✅(110b1ff):P0 #1 #2 + P1 #5 #8   → 補平誠實缺口,CI 固化成紀律
 第二迭代 ✅(0950906):P0 #3 #4 + P1 #6 #7   → 反例最小化 + 規模擴張 + 門檻
-第三迭代(按需)   :P2 #9 #10                 → 增量編輯器 demo / LSP,對外可用
-長期(學術)       :P3 #12                   → 形式化證明,報告級交付
+第三迭代 ✅(b904921):P3 #12 Phase 0–2   → 鏡像 + 抽象 Newman + 具體 SN + 對帳框架
+第四迭代(進行中):P3 #12 Phase 3(R3 WCR)→ 前測完成(docs/R3-RESEARCH.md);
+                  併入 #4/#5 兩項工程修復(CI 環境可重建 + 門檻可信度)
+按需            :P2 #9 #10                → 增量編輯器 demo / LSP,對外可用
 ```
 
 **原則**:每一步都以「新增/強化某條具名測試」為完成標準 —— 律不過,碼不合。

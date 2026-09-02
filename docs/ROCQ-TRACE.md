@@ -1,6 +1,6 @@
-# ROCQ 形式化對照表(ROCQ-TRACE)
+# ROCQ 形式化對照表(ROCQ-TRACE) — Phase 0–3 對帳文件(2026-09-02 更新)
 
-> Phase 0/1 對帳文件(2026-09-02)。主計劃見 `docs/ROCQ-PLAN.md`。
+> Phase 0–3 對帳文件(2026-09-02 更新:R3 前測 + 鏡像決策 D7)。主計劃見 `docs/ROCQ-PLAN.md`,難度計劃見 `docs/HARD-ITEMS.md`。
 > 本檔 = 「Rocq 定理 ↔ 律 ↔ 具名測試 ↔ 鏡像決策」的機械對照與現況。
 > 紀律:每條 Rocq 陳述必須能指回 Rust 側的律/測試;反之亦然。
 
@@ -24,7 +24,7 @@
 | R4 | `newman_unf`(唯一正規形) | 同上 | ✅ 已證(推論) | L9a |
 | R4′ | `exists_normal_form`(正規形存在) | 同上 | ✅ 已證 | L8b(μ 保證終止) |
 | R2 | 具體 SN:`sn step_ct`(CommutativeTrim × Guarded)| `rocq/theories/ConcreteSN.v` | ✅ 已證(2026-09-02)| L8a/L8b(窮舉) |
-| R3 | 具體 WCR(交換引理 + 臨界對)— **數學核心** | — | ⬜ Phase 3 | L9b 窮舉(4×6 共 623,616 狀態 × 635,424 臨界對,0 違反) |
+| R3 | 具體 WCR(交換引理 + 臨界對)— **數學核心** | `rocq/theories/ConcreteWCR.v`(待建)| 🔶 Phase 3 開工(前測完成)| L9b 窮舉(4×6 共 623,616 狀態 × 635,424 臨界對,0 違反)+ **本輪前測:精確交換在未過濾 4×6(3,111,696 狀態 / 2,443,506 對)全綠** |
 | R5 | L7b 迭代淨化終止 + 不動點 | — | ⬜ Phase 4 | L7b / `l7b_evaluate` |
 | R6 | T2 χ = ω(max_overlap = greedy_chromatic)| — | ⬜ Phase 5 | `test_theorem_T2_interval_graphs_are_perfect`(400 樣本) |
 | R7 | NaiveMenu 反例存在性 | — | ⬜ Phase 6(選配)| L9c 機器反例 |
@@ -45,7 +45,24 @@ Acc 反向歸納恰給「∀a′, r a a′ → P a′」的推進 IH)。
 
 ---
 
-## 二、鏡像決策(D1–D6,Phase 0-b)
+### R3 前測(2026-09-02,`examples/r3_probe.rs` + `examples/r3_swap.rs`)
+
+| 宇宙 | 狀態 | 不同後繼臨界對 | start 不變 | 精確交換 | Guarded≡Raw | 紅邊增加 |
+|---|---|---|---|---|---|---|
+| 3×6(+過濾)| 35,280 | 10,668 | 0 違反 | 10,668/10,668 | 0 偏離 | 0 |
+| 4×5(+過濾)| 105,216 | 100,392 | 0 違反 | 100,392/100,392 | 0 偏離 | 0 |
+| 4×6(+過濾,=CI)| 623,616 | 635,424 | 0 違反 | 635,424/635,424 | 0 偏離 | 0 |
+| 4×6(**無過濾**)| 3,111,696 | 2,443,506 | 0 違反 | 2,443,506/2,443,506 | 0 偏離 | 0 |
+
+推論(寫進 Phase 3 的定理陳述):
+* `ct_join_exact`:兩步不同後繼時,`apply (apply s ra) rb = apply (apply s rb) ra`(等式級,非 merely joinable);
+* `ct_guard_redundant`:CT 上 `applicable s CT Guarded = applicable s CT Raw` ⇒ µ 遞減是定理而非假設;
+* `ct_red_edges_mono`:任何 CT 步不增紅邊數。
+**鏡像決策 D7(新增)**:`enumerate_states` 不施加 distinct-start 過濾(過濾屬 Rust 側
+規模控制,見 `src/l9newman.rs`);前測顯示定理在此更強宇宙仍成立 ⇒ 鏡像保持無過濾,
+Rocq 定理的 ∀ 陳述亦不需該假設。
+
+## 二、鏡像決策(D1–D7,Phase 0-b)
 
 > 完整鏡像:`rocq/theories/Mirror.v`(`K / Interval / Ev / AState / 紅邊 / µ /
 > Rule / Policy / Menu / apply / applicable / 狀態枚舉`)。
@@ -103,3 +120,8 @@ CI(`.github/workflows/ci.yml` → job `rocq`):apt 裝 coq + mathcomp →
    `scripts/setup_dev.sh` 一鍵重建(apt 需 sudo;Rust 工具鏈重裝約 10 秒)。
 4. `rocq-of-rust` 路線未採用(理由見 ROCQ-PLAN §4.2);若後續需要「實作層」
    驗證(如 `rep::apply` 無 panic),可作 Phase 6 選配。
+5. **本輪如實修正兩處文件口徑**:(a)「46 具名測試」→ 實跑 `cargo test --all` = 47
+   (15 單元 + 32 集成;本輪新增 L9b′ 後為 32);(b) `docs/BENCH.md`/`bench/BASELINE.json`
+   所依託的 bench gate 在 CI(main @ b904921)與本地**同時紅**,原因非代碼回歸,而是
+   基線單機單次採樣 + 0.0005 ms 級指標的統計噪声 ⇒ 修法見 `docs/HARD-ITEMS.md` §#5。
+   在修好之前,本專案不得宣稱「全管線綠」。

@@ -2,7 +2,8 @@
 
 > **紀律:律先於碼 —— 每律一個具名測試;律不過,碼不合。**
 > 本表即該紀律的字面落實(P1 #8):規格條文 → 具名測試 → 代碼符號,一表窮盡。
-> 基線:第二迭代(第一迭代 + P0 #3/#4 + P1 #6/#7)· 全管線綠(fmt / clippy -D warnings / test / doc -D warnings / cov gate / bench gate)。
+> 基線:第三迭代(+ Rocq Phase 0–2)· fmt / clippy -D warnings / test(47)/ doc -D warnings / cov gate **綠**;
+> bench gate **紅**(基線單機單次採樣,本地重現同判;修法見 `docs/HARD-ITEMS.md` §#5)——本表對「綠」的定義是**實跑結果**,不是文件宣稱。
 
 ---
 
@@ -13,13 +14,14 @@
 | R1 | 抽象 Newman:`sn r -> wcr r -> confluent r`(Huet 式,構造) | ✅ 已證 |
 | R4 | `newman_unf`(唯一正規形)+ `exists_normal_form` | ✅ 已證 |
 | R2 | 具體 SN:`sn step_ct`(CommutativeTrim × Guarded,µ=|E_red|)| ✅(Phase 2)|
-| R3/R5/R6/R7 | 具體 WCR / L7b 終止 / T2 / 反例存在 | ⬜ Phase 3–6 |
+| R3 | 具體 WCR(`ct_join_exact` → `wcr step_ct`) | 🔶 Phase 3 開工中:**前測全綠**(精確交換 2,443,506/2,443,506 @ 未過濾 4×6;Guarded≡Raw;紅邊單調)——`docs/R3-RESEARCH.md` |
+| R5/R6/R7 | L7b 終止 / T2 / 反例存在 | ⬜ Phase 4–6 |
 
 配套:內核鏡像 `rocq/theories/Mirror.v`(D1–D6 決策)+ 對帳框架
 `tools/rocq_reconcile.py`(Rust 實例 ↔ Rocq 計算,kernel 複驗 19 樣本點;
 已抓出並修正 R4Runtime 尾插/頭插分歧)+ CI job `rocq`。
 
-## 〇、測試全量清單(46 具名測試)
+## 〇、測試全量清單(47 具名測試)
 
 **CL0 載體 — 九律 + 編輯單體 + 定理 + 語義面(31,`tests/laws.rs`)**
 
@@ -42,6 +44,7 @@
 | `test_law_L9_critical_pairs_joinable` | L9b 臨界對可合流 |
 | `test_law_L9_naive_menu_finds_counterexample` | L9c 機器找反例(通道)|
 | `test_law_L9_scaled_space_joinable` | **L9 規模擴張 4×5 + 並行(第二迭代)**|
+| `test_law_L9b_parallel_moves_exact_swap` | **L9b′ 精確交換/側條件冗餘/紅邊單調(第四迭代,Rocq R3 前測)**|
 | `test_law_L9_scaled_space_counterexample_found` | **並行版「機器找反例」仍在(第二迭代)**|
 | `test_theorem_T2_interval_graphs_are_perfect` | T2 區間圖完美性 |
 | `test_edit_monoid_laws` | M1/M2/M4/M5 編輯單體 |
@@ -99,6 +102,7 @@
 | §4.2 | L8:菜單每規則嚴格遞減 μ | `test_law_L8_red_edge_decreasing` | `rep::Menu` / `rep::Rule` | ✅ |
 | §4.2 | L8:μ ⇒ 終止保證 | `test_law_L8_measure_is_guaranteeing_termination` | `rep::Policy`(μ 計算) | ✅ |
 | §4.3 | L9:SN + WCR ⇒ CR(Newman)| `test_law_L9_unique_normal_form` + `test_law_L9_critical_pairs_joinable` | `l9newman::newman_check` | ✅ |
+| §4.3 | L9b′ 精確交換 + 側條件冗餘 + 紅邊單調(Rocq R3 的鏡面)| `test_law_L9b_parallel_moves_exact_swap` | `rep::{apply, Menu::applicable, AState::red_edges}` | ✅(Rust 窮舉)/ 🔶(Rocq 定理 Phase 3) |
 | §4.3 | L9 反例通道(機器找反例)| `test_law_L9_naive_menu_finds_counterexample` | `rep::enumerate_states` | ✅ |
 | §4.4 | 錨定保持:事實攜帶可回跳 span | `test_law_L6_*`(錨位址並檢)| `ast`(事實層 span)| ✅ |
 | §5.1 | 詞法 DFA、平鋪、trivia 保留 | `test_law_L1_lexical_tiling` / `lex_lexical_invariants` | `lex::lex` | ✅ |

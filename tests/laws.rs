@@ -547,6 +547,102 @@ fn test_law_L9_scaled_space_counterexample_found() {
 }
 
 // ===========================================================================
+// L9b′(Phase 3 前置):平行步「精確交換」+ 側條件冗餘 + 紅邊單調性
+//   Rocq 側 R3(`ct_join_exact`)的經驗前測:三條引理的無量詞版本。
+// ===========================================================================
+
+/// 狀態的可觀測骨架(與 `l9newman::canon_key` 同法:log 不參與相等性)。
+fn ct_key(s: &AState) -> Vec<(u32, u32, K, u32, u32)> {
+    let mut v: Vec<_> = s
+        .evs
+        .iter()
+        .map(|e| (e.id, e.storage, e.kind, e.it.start, e.it.end))
+        .collect();
+    v.sort();
+    v
+}
+
+fn ct_starts(s: &AState) -> Vec<(u32, u32)> {
+    s.evs.iter().map(|e| (e.id, e.it.start)).collect()
+}
+
+#[test]
+fn test_law_L9b_parallel_moves_exact_swap() {
+    // 宇宙:3 事件 × 6 座標(35,280 狀態)+ 4 事件 × 5 座標(105,216 狀態)。
+    // 註:**不**加 distinct-start 過濾 —— 證明不該依赖新狀態的额外假設。
+    let mut pairs = 0usize;
+    let mut swaps = 0usize;
+    for (n, m) in [(3usize, 6u32), (4, 5)] {
+        for s in &rep::enumerate_states(n, m) {
+            // (i) 側條件冗餘:CT 菜單上 Guarded 與 Raw 給出同一規則集
+            //     ⇒ Rocq 可證 `applicable s CT Guarded = applicable s CT Raw`,
+            //        L8 的 guard 在 CT 上是定理而非假設。
+            assert_eq!(
+                Menu::CommutativeTrim.applicable(s, Policy::Guarded).len(),
+                Menu::CommutativeTrim.applicable(s, Policy::Raw).len(),
+                "guard must be redundant on the canonical menu (state {:?})",
+                s.evs
+            );
+
+            // (ii) 紅邊單調性:任何 CT 步驟只縮 end,故 |E_red| 不增
+            //      ⇒ μ 的非增性;嚴格遞減則由 guard(見 (i):兩者同集)給出。
+            for r in Menu::CommutativeTrim.applicable(s, Policy::Raw) {
+                let Some(t) = rep::apply(s, r) else {
+                    continue;
+                };
+                assert!(
+                    t.red_edges().len() <= s.red_edges().len(),
+                    "red edges must never grow: {:?} → {:?}",
+                    s.evs,
+                    t.evs
+                );
+            }
+
+            // (iii) 精確交換(swap lemma):s→a、s→b ⇒ a→b、b→a 且兩端同狀態。
+            let g = Menu::CommutativeTrim.applicable(s, Policy::Guarded);
+            for x in 0..g.len() {
+                for y in (x + 1)..g.len() {
+                    let (ra, rb) = (g[x], g[y]);
+                    let (Some(a), Some(b)) = (rep::apply(s, ra), rep::apply(s, rb)) else {
+                        continue;
+                    };
+                    pairs += 1;
+                    if ct_key(&a) == ct_key(&b) {
+                        continue; // 同一後繼:菱形平凡
+                    }
+                    // start 不變性:修任何事件都不動任何事件的起點
+                    assert_eq!(ct_starts(&a), ct_starts(s), "start invariance (a)");
+                    assert_eq!(ct_starts(&b), ct_starts(s), "start invariance (b)");
+                    match (rep::apply(&a, rb), rep::apply(&b, ra)) {
+                        (Some(ac), Some(bc)) => {
+                            assert_eq!(
+                                ct_key(&ac),
+                                ct_key(&bc),
+                                "diamond corner differs: {:?} / {:?}",
+                                ac.evs,
+                                bc.evs
+                            );
+                            swaps += 1;
+                        }
+                        (ac, bc) => panic!(
+                            "exact swap failed: rules {:?} / {:?} on {:?} → {:?} / {:?}",
+                            ra,
+                            rb,
+                            s.evs,
+                            ac.map(|t| t.evs),
+                            bc.map(|t| t.evs)
+                        ),
+                    }
+                }
+            }
+        }
+    }
+    // 探針必須真的咬到東西(否則測試是空轉)。
+    assert!(pairs > 100_000, "probe must exercise pairs, got {pairs}");
+    assert_eq!(pairs, swaps, "every non-trivial peak must swap exactly");
+}
+
+// ===========================================================================
 // 編輯單體(§2.1):M1 單位元、M2 位移複合 = 平移量之和、M3 結合律、M4 應用一致
 // ===========================================================================
 
