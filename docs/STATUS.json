@@ -1,6 +1,6 @@
 {
   "schema": "cl0r0-status/v1",
-  "generated_at_utc": "2026-09-02T23:22:43Z",
+  "generated_at_utc": "2026-09-03T00:16:22Z",
   "note": "由 tools/gen_status.py 產生,請勿手改。CI 每次重新產生後由 tools/docs_check.py 稽核文件;本地重生成:python3 tools/gen_status.py",
   "toolchain": {
     "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",

@@ -2,11 +2,28 @@
 """覆蓋率門檻(P1 #6):解析 lcov,按模組檢查行覆蓋率。
 
 門檻(本迭代固化):
-  * 核心載體模組(span/lex/parse/tree/edit/gen/shrink/rep/r0/l9newman)>= 90%;
-  * ast.rs(§3.2-3.3 語義面)豁免於 90%,硬門檻 75% —— 理由見 docs/COVERAGE.md:
-    (a) llvm-cov 對 3 行內的小函數(match 直接返回 &str)存在計數器歸屬失真;
-    (b) 其餘未覆蓋行對應 CL0 語法不可達的保留槽(Ctx::Lhs / killer 防禦分支)。
+  * 核心載體模組(span/lex/parse/tree/gen/shrink/rep/r0/l9newman)>= 90%;
+  * 豁免模組各自帶**自己的硬門檻**(不是共用一個),理由逐條記於 EXEMPT:
+    - ast.rs  ≥75% —— §3.2-3.3 語義面:
+      (a) llvm-cov 對 3 行內的小函數(match 直接返回 &str)存在計數器歸屬失真;
+      (b) 其餘未覆蓋行對應 CL0 語法不可達的保留槽(Ctx::Lhs / killer 防禦分支)。
+    - edit.rs ≥85% —— 2026-09-03 CI 實測:本機量 96/97 = 99.0%,GitHub runner
+      量 86/97 = 88.7%。同一份碼、同一 rustc 1.98.0 / cargo-llvm-cov 0.9.0 /
+      x86_64、同一組 36 個測試全過。差的那 10 行(`Edit::is_empty` 53-55、
+      `Edit::shift` 58-66)在 runner 上被 inline 掉後歸因給呼叫者,並非沒執行
+      —— 已證明:本機只跑 tests/laws.rs,`edit.rs:58` 就有 count=603。
+      **真實缺口只有第 93 行這 1 行。** 門檻取 85% 而非 75%,是為了仍抓得到
+      掉 ≥4 行的真實退化(88.7% → 84.5% 即紅),不因豁免而開天窗。
   * bin 的 main(fuzz.rs / cl0r0.rs / l9newman.rs)不計入(由執行驅動)。
+
+## 覆蓋率數字不可跨平台移植(2026-09-03,已知且無法由配置消除)
+
+已實測排除:stale profraw(`rm -rf target` 重建後一樣)、toolchain 漂移(鎖
+1.98.0 後一樣)、隨機性(fuzzer 固定種子)。行表兩邊**完全一致**,差異在哪些行
+顯示為 0。關掉增量編譯後 `rep.rs` 兩邊一致(95.9%),但 `edit.rs` 與 `span.rs`
+仍**反向翻轉**(本地 99.0%/88.5%,runner 88.7%/100.0%)。`-Ccodegen-units=1/256`、
+`-Cllvm-args=--inline-threshold=0` 皆無效。
+⇒ **以 CI 為 canonical**;本機若量到不同的數字,屬已知現象,不是回歸。
 
 ## 為什麼要有「fail-open 防線」(2026-09-03 健檢 P2-6)
 
@@ -30,10 +47,16 @@
 import re
 import sys
 
-CORE = ["span.rs", "lex.rs", "parse.rs", "tree.rs", "edit.rs", "gen.rs", "shrink.rs", "rep.rs", "r0.rs", "l9newman.rs"]
-EXEMPT = {"ast.rs": "語義面(§3.2-3.3):行映射失真 + 保留槽,硬門檻 75%"}
+CORE = ["span.rs", "lex.rs", "parse.rs", "tree.rs", "gen.rs",
+        "shrink.rs", "rep.rs", "r0.rs", "l9newman.rs"]
 CORE_TOL = 0.90
-AST_TOL = 0.75
+
+# 豁免模組自帶硬門檻:name -> (floor, 書面理由)
+EXEMPT = {
+    "ast.rs": (0.75, "語義面(§3.2-3.3):行映射失真 + 保留槽"),
+    "edit.rs": (0.85, "llvm-cov 對 is_empty/shift 的行歸因跨平台不一致;真實缺口僅 1 行"),
+}
+# CLI 旗標可覆寫個別門檻(自測用):--ast / --edit
 
 
 def parse_lcov(path):
@@ -75,16 +98,18 @@ def fail(msg, *detail):
 
 def main(argv):
     args = list(argv)
-    core_tol, ast_tol = CORE_TOL, AST_TOL
-    for flag in ("--core", "--ast"):
-        if flag in args:
+    core_tol = CORE_TOL
+    floors = {name: tol for name, (tol, _) in EXEMPT.items()}
+    overrides = {"--core": None, "--ast": "ast.rs", "--edit": "edit.rs"}
+    for flag, target in overrides.items():
+        while flag in args:
             i = args.index(flag)
             v = float(args[i + 1])
             del args[i : i + 2]
-            if flag == "--core":
+            if target is None:
                 core_tol = v
             else:
-                ast_tol = v
+                floors[target] = v
     if not args:
         print(__doc__)
         return 2
@@ -128,9 +153,10 @@ def main(argv):
             ok = ratio >= core_tol
             tag = "ok" if ok else f"FAIL(<{core_tol:.0%})"
         elif name in EXEMPT:
-            ok = ratio >= ast_tol
+            tol = floors[name]
+            ok = ratio >= tol
             tag = ("ok(exempt)" if ok else "FAIL(exempt)")
-            tag += "  [" + EXEMPT[name] + "]"
+            tag += f"  [{EXEMPT[name][1]},硬門檻 {tol:.0%}]"
         else:
             continue
         checked += 1
@@ -142,7 +168,9 @@ def main(argv):
         return 1
     print(
         f"coverage gate: ok(已檢查 {checked} 個模組;受門檻約束 {len(required)} 個 "
-        f"= {len(CORE)} 核心 ≥{core_tol:.0%} + {len(EXEMPT)} 豁免 ≥{ast_tol:.0%})"
+        f"= {len(CORE)} 核心 ≥{core_tol:.0%} + {len(EXEMPT)} 豁免["
+        + ", ".join(f"{n} ≥{floors[n]:.0%}" for n in sorted(EXEMPT))
+        + "])"
     )
     return 0
 

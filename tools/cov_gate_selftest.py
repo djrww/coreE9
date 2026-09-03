@@ -19,9 +19,10 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 GATE = os.path.join(HERE, "cov_gate.py")
 
-CORE = ["span.rs", "lex.rs", "parse.rs", "tree.rs", "edit.rs", "gen.rs",
+CORE = ["span.rs", "lex.rs", "parse.rs", "tree.rs", "gen.rs",
         "shrink.rs", "rep.rs", "r0.rs", "l9newman.rs"]
-EXEMPT = ["ast.rs"]
+# 豁免模組自帶硬門檻:name -> floor
+EXEMPT = {"ast.rs": 0.75, "edit.rs": 0.85}
 
 # 一份「全綠」的基線覆蓋率(貼近真實值)
 GOOD = {
@@ -29,7 +30,7 @@ GOOD = {
     "lex.rs": (206, 193),
     "parse.rs": (983, 951),
     "tree.rs": (60, 58),
-    "edit.rs": (97, 96),
+    "edit.rs": (97, 96),      # 99.0% → 走豁免(≥85%)
     "gen.rs": (260, 258),
     "shrink.rs": (77, 74),
     "rep.rs": (245, 222),
@@ -89,6 +90,18 @@ CASES = [
     ("ast.rs 76.9%(豁免區間內)→ 綠", lcov(GOOD), [], 0),
     ("ast.rs 掉到 74.9% → 紅(硬門檻 75%)",
      lcov(mutated(**{"ast.rs": (1000, 749)})), [], 1),
+
+    # ---- 豁免模組 edit.rs:自帶硬門檻 85%,不是無條件放行 ----
+    # 88.7% 是 GitHub runner 的實測值、99.0% 是本機實測值,兩者皆須綠;
+    # 但掉到 84.9% 必須紅 —— 豁免不是天窗。
+    ("edit.rs 88.7%(runner 實測,豁免區間內)→ 綠",
+     lcov(mutated(**{"edit.rs": (97, 86)})), [], 0),
+    ("edit.rs 99.0%(本機實測)→ 綠", lcov(GOOD), [], 0),
+    ("edit.rs 掉到 84.9% → 紅(硬門檻 85%)",
+     lcov(mutated(**{"edit.rs": (1000, 849)})), [], 1),
+    ("豁免模組 edit.rs 缺席 → 紅", lcov(dropped("edit.rs")), [], 1),
+    ("--edit 0.95 抬高門檻後,88.7% 也要紅",
+     lcov(mutated(**{"edit.rs": (97, 86)})), ["--edit", "0.95"], 1),
 
     # ---- 同名 basename 覆蓋 ----
     ("同名 basename(src/ 與 src/util/ 都有 r0.rs)→ 紅",
