@@ -195,6 +195,29 @@ Rocq 側仍需「候選集變化 ⇒ min 不變」的刻畫。
   需要新建的基建:`red_edges_aux` 的成員刻畫、`uniq_ids` 下的 `NoDup`、
   以及「縮短只刪不增」的單調性(估 200–400 行)。
 
+**2026-09-03 進度:基建已落地(`rocq/theories/RedEdges.v`,254 行,已掛進
+`make -C rocq`,`Print Assumptions` 全數 "Closed under the global context")**。
+
+| 引理 | 內容 |
+|---|---|
+| `ct_red_pred` | 把 `red_edges_aux` 內的 `let p` 提到命名層(逐字對應),使後續可陳述 |
+| `shorten_rel` + `r1_apply_shorten` | `r1_apply` 的結構刻畫:右端點變小、其餘欄位逐字不變 |
+| `shorten_rel_ids` | 縮短不改 id 列 |
+| `i_overlap_shorten_{l,r}` | 右端點變小 ⇒ 重疊只減不增(`lia`) |
+| `ct_pred_shorten_{l,r}` | 同上,但推到 `red_edges_aux` 的完整判定述詞(含 storage / kind / runtime) |
+| **`red_edges_aux_shorten_incl`** | **主定理:縮短後的紅邊是原本的子集** |
+| `red_edges_shorten_state` | AState 層版本(R1 不改 runtime,故 `rt` 相同) |
+
+證明要點一則(供後人省時):歸納時若用 `simpl`,它會把 `red_edges_aux`
+一併展開,導致 `rewrite red_edges_aux_cons` 對不上 —— 必須用 `cbn [app]`
+只化簡串接。另一處:被縮短的那個事件在 `l'` 裡是 `e'`、在 `l` 裡是 `e`,
+兩者**不相等**,故 `in_map_iff` 的見證要換成 `e`,配對相等由
+`ev_id e' = ev_id e` 補上。
+
+仍缺(下一輪):(a)「不涉及 i 的邊在縮短前後**等價**」(本檔只有單向包含);
+(b) `uniq_ids -> NoDup (red_edges s)` —— 有了它才能把子集關係換成長度不等式,
+完成計數論證,進而得到 `wcr step_ct` 與 `R4_ct_confluent`。
+
 **工程教訓(供後續輪次省時,已寫進 `WCRUtil.v` 頭註)**:
 1. `nth_error` 按 nat 遞歸,遇到未約簡的 `trim_at q i c` 即卡死 ⇒ 改走
    成對歸納謂詞(`trim1`),不要在 `nth_error` 上疊 `cbn/simpl/native_compute`。

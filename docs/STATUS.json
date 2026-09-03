@@ -1,6 +1,6 @@
 {
   "schema": "cl0r0-status/v1",
-  "generated_at_utc": "2026-09-03T00:16:22Z",
+  "generated_at_utc": "2026-09-03T00:29:03Z",
   "note": "由 tools/gen_status.py 產生,請勿手改。CI 每次重新產生後由 tools/docs_check.py 稽核文件;本地重生成:python3 tools/gen_status.py",
   "toolchain": {
     "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
@@ -71,8 +71,8 @@
     }
   },
   "rocq": {
-    "files": 6,
-    "lines": 1536,
+    "files": 7,
+    "lines": 1790,
     "admitted": 0,
     "axiom": 0,
     "reconcile_facts": 19,
@@ -81,6 +81,7 @@
       "ConcreteSN.v",
       "ConcreteWCR.v",
       "Mirror.v",
+      "RedEdges.v",
       "WCRUtil.v",
       "reconcile_gen.v"
     ]
