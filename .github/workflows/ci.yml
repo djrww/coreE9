@@ -27,6 +27,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # CI 自己也要被檢查。2026-09-03 的教訓:把 job 的 `env:` 內容清空只留
+      # 註解,`yaml.safe_load` 照樣通過(解析成 None),但 GitHub **拒絕整個
+      # workflow** —— 名稱退化成檔名、一次 run 都不產生。那時 CI 不是「紅」,
+      # 是**不存在**,而「CI 全綠」的宣稱仍能繼續成立。tools/wf_check.py
+      # 是針對這個失效模式的防線。
+      - name: Workflow structural check
+        run: |
+          python3 -c "import yaml" 2>/dev/null || pip3 install --quiet pyyaml
+          python3 tools/wf_check.py
+
       - name: Install stable toolchain (rustfmt, clippy)
         uses: dtolnay/rust-toolchain@1.98.0
         with:
@@ -140,13 +150,12 @@ jobs:
   coverage:
     name: coverage gate(core ≥ 90%,ast ≥ 75% 豁免)
     runs-on: ubuntu-latest
-    env:
-      # 2026-09-03 實測紀錄(試過後**不採用**,留著避免後人重踩):
-      # 曾設 CARGO_INCREMENTAL=0(rustc coverage book 的建議做法),結果
-      # `rep.rs` 兩邊確實一致了(235/245),但 `span.rs` 在本機由 26/26 掉到
-      # 23/26(88.5%)—— **沒有解決可移植性,反而製造本地紅燈**,故撤。
-      # 結論:這個差異不是增量編譯單一變數造成的,關掉它得不償失。
-      # 詳見 docs/COVERAGE.md「覆蓋率數字不可跨平台移植」。
+    # 2026-09-03 實測紀錄(試過後**不採用**,留著避免後人重踩):
+    # 曾設 CARGO_INCREMENTAL=0(rustc coverage book 的建議做法),結果
+    # `rep.rs` 兩邊確實一致了(235/245),但 `span.rs` 在本機由 26/26 掉到
+    # 23/26(88.5%)—— **沒有解決可移植性,反而製造本地紅燈**,故撤。
+    # 結論:這個差異不是增量編譯單一變數造成的,關掉它得不償失。
+    # 詳見 docs/COVERAGE.md「覆蓋率數字不可跨平台移植」。
     steps:
       - uses: actions/checkout@v4
 
