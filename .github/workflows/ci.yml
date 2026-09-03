@@ -1,12 +1,24 @@
 name: CI
 
 on:
+  # ★ N3(2026-09-03):原先只有 [main] ⇒ 直接 push 到 `p4` 等主題分支
+  # **完全不觸發 CI**。實測 GitHub API:受檢 HEAD `483a142` 上查無任何
+  # workflow run / check-run(total_count: 0)—— 也就是說「CI 全綠」的宣稱
+  # 從未在該 commit 上被驗證過。改用 glob 覆蓋 `p*` 主題分支。
   push:
-    branches: [main]
+    branches: [main, "p*"]
   pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
+  # ★ 2026-09-03:toolchain 由 @stable 鎖成 1.98.0。
+  # 原因(實測):coverage gate 的數字**不跨 LLVM 版本可移植** —— 同一份碼,
+  # 本機(rustc 1.98.0)量到 edit.rs 94/95、rep.rs 222/245,而 runner 上
+  # `@stable`(當時已是 1.99.x)量到 edit.rs 86/97、rep.rs 217/245 ——
+  # **連分母都不一樣**(95 vs 97),是 LLVM 產出的行表不同,不是真的覆蓋率債。
+  # 這種「本地綠、CI 紅」的門檻毫無判別力,故鎖版本讓兩邊可比。
+  # 代價:不會再主動抓到新 rustc 的破壞 ⇒ 升版改為**可審查的刻意動作**。
 
 jobs:
   verify:
@@ -15,8 +27,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # CI 自己也要被檢查。2026-09-03 的教訓:把 job 的 `env:` 內容清空只留
+      # 註解,`yaml.safe_load` 照樣通過(解析成 None),但 GitHub **拒絕整個
+      # workflow** —— 名稱退化成檔名、一次 run 都不產生。那時 CI 不是「紅」,
+      # 是**不存在**,而「CI 全綠」的宣稱仍能繼續成立。tools/wf_check.py
+      # 是針對這個失效模式的防線。
+      - name: Workflow structural check
+        run: |
+          python3 -c "import yaml" 2>/dev/null || pip3 install --quiet pyyaml
+          python3 tools/wf_check.py
+
       - name: Install stable toolchain (rustfmt, clippy)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: rustfmt, clippy
 
@@ -35,22 +57,92 @@ jobs:
       - name: rustdoc (deny warnings)
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 
+  # ── N4-a:定理庫在兩個 Coq/Rocq 版本上都必須編譯(§P3-14 #4)──────────
+  # 為什麼拆成兩個 job:版本矩陣要的是「敘述在兩個版本都成立」,而對帳
+  # (reconcile)需要 cargo —— 容器內沒有,硬塞進去只會讓矩陣兩格都變慢。
+  # 故:定理庫走容器矩陣,對帳留在單一版本(Rust ↔ Rocq 的語義一致性與
+  # coq 版本無關,它是兩個獨立實作的對比)。
   rocq:
-    name: rocq gate(Phase 0–3:mirror + WCRUtil + Newman + 對帳)
+    name: rocq theorems · ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false          # 一格紅不要停掉另一格:要看見「哪個版本斷」
+      matrix:
+        include:
+          - label: "coq 8.20"
+            id: "coq-8.20"
+            image: "coqorg/coq:8.20"
+            coqc: "coqc"
+          - label: "rocq 9.2"
+            id: "rocq-9.2"
+            image: "rocq/rocq-prover:9.2"
+            coqc: "rocq compile"
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 2026-09-03 實測修正(三處,全部由真實 runner 的紅燈抓出)────────
+      # (a) 映像 repo 不同:coqorg/coq 最高只到 8.20、**沒有 9.x 標籤**;
+      #     Rocq 9 在 rocq/rocq-prover。故不用 docker-coq-action(它只認前者)。
+      # (b) 二進位名不同:Rocq 9 沒有 `coqc`,改成 `rocq compile`(子命令)。
+      #     (本機 docker 實測:`rocq --version` → The Rocq Prover, version 9.2)
+      # (c) 權限:runner 的 uid(1001)≠ 映像內 coq/rocq 使用者的 uid(1000),
+      #     直接掛載 $PWD 會 `Mirror.glob: Permission denied`。
+      #     解法:唯讀掛載,複製到容器內可寫處(/tmp)再建。
+      #
+      # 另:`From Coq Require Import` 在 Rocq 9 仍可用,只給一條 deprecation
+      # warning(`From Coq` → `From Stdlib`)。不改寫是因為 Coq 8.20 沒有
+      # `Stdlib`,改了那格就紅。
+      - name: Build theorem library in ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/src:ro" -w /tmp "${{ matrix.image }}" bash -lc '
+            set -e
+            cp -a /src /tmp/work && cd /tmp/work
+            echo "== toolchain =="
+            ${{ matrix.coqc }} --version
+            ocamlc -version
+            echo "== build =="
+            # 先 clean —— 否則 `cp -a` 會把 .vo 連 mtime 一起帶進來,make 判定
+            # 為最新而什麼都不編,下面的「.vo 存在」檢查就變成假綠。
+            make -C rocq clean
+            make -C rocq COQC="${{ matrix.coqc }}"
+            echo "== guards =="
+            # 斷言 1:五個 .vo 必須真的存在
+            for f in Mirror WCRUtil AbstractArs ConcreteSN ConcreteWCR; do
+              test -f "rocq/theories/$f.vo" || { echo "MISSING $f.vo"; exit 1; }
+            done
+            # 斷言 2:定理庫不得含 Admitted / Axiom(本專案的硬底線)
+            if grep -rnE "Admitted|Axiom" rocq/theories/*.v; then
+              echo "FOUND Admitted/Axiom"; exit 1
+            fi
+            echo "guards ok"
+          ' 2>&1 | tee "rocq-version-${{ matrix.id }}.txt"
+
+      - name: Upload version line
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocq-version-${{ matrix.id }}
+          path: rocq-version-${{ matrix.id }}.txt
+          if-no-files-found: warn
+
+  rocq-reconcile:
+    name: rocq reconcile(Rust 實例 ↔ Rocq 鏡像,kernel 複驗)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rocq(Coq)+ MathComp
+      # 注意:**不裝 MathComp** —— 本形式化只用 Coq 標準庫
+      # (`From Coq Require Import List Arith Bool Lia Classical Wellfounded`),
+      # 全庫 grep 不到任何 mathcomp / ssreflect 載入,實測卸載後仍全綠。
+      # 少一個相依就少一個跨版本更名的破口(#4 關心的正是這個)。
+      - name: Install Rocq(Coq)
         run: |
           sudo apt-get update
-          sudo apt-get install -y coq libcoq-mathcomp-ssreflect
+          sudo apt-get install -y coq
 
       - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build theorem library
-        run: make -C rocq
+        uses: dtolnay/rust-toolchain@1.98.0
 
       - name: Reconcile(Rust 實例 ↔ Rocq 鏡像)
         run: make -C rocq reconcile
@@ -58,11 +150,17 @@ jobs:
   coverage:
     name: coverage gate(core ≥ 90%,ast ≥ 75% 豁免)
     runs-on: ubuntu-latest
+    # 2026-09-03 實測紀錄(試過後**不採用**,留著避免後人重踩):
+    # 曾設 CARGO_INCREMENTAL=0(rustc coverage book 的建議做法),結果
+    # `rep.rs` 兩邊確實一致了(235/245),但 `span.rs` 在本機由 26/26 掉到
+    # 23/26(88.5%)—— **沒有解決可移植性,反而製造本地紅燈**,故撤。
+    # 結論:這個差異不是增量編譯單一變數造成的,關掉它得不償失。
+    # 詳見 docs/COVERAGE.md「覆蓋率數字不可跨平台移植」。
     steps:
       - uses: actions/checkout@v4
 
       - name: Install stable toolchain + llvm tools
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: llvm-tools-preview
 
@@ -72,8 +170,29 @@ jobs:
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
 
+      # 2026-09-03:本機與 runner 量到的**行表本身不同**(edit.rs 95 vs 97 行、
+      # rep.rs 238 vs 245),而 rustc / cargo-llvm-cov / 架構三者皆相同
+      # (1.98.0 / 0.9.0 / x86_64)。先把環境與報告原樣上傳,才好定位。
       - name: Collect coverage
-        run: cargo llvm-cov --lcov --output-path target/coverage.lcov
+        run: |
+          rustc --version
+          cargo llvm-cov --version
+          wc -l src/edit.rs src/rep.rs
+          cargo llvm-cov clean
+          cargo llvm-cov --lcov --output-path target/coverage.lcov
+
+      - name: Upload raw lcov (for cross-platform diffing)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: target/coverage.lcov
+          if-no-files-found: warn
+
+      # 先自測 gate 判別力:空報告 / 模組缺席 / 同名 basename 都必須紅
+      # (舊版對這些一律 exit 0 —— 門檻只在文件裡存在)
+      - name: Coverage gate self-test(fail-open guards)
+        run: python3 tools/cov_gate_selftest.py
 
       - name: Coverage gate
         run: python3 tools/cov_gate.py target/coverage.lcov
@@ -85,7 +204,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -110,4 +229,46 @@ jobs:
         with:
           name: hotpaths-bench-log
           path: target/bench.log
+          if-no-files-found: ignore
+
+  docs-consistency:
+    name: docs consistency(STATUS.json = 數字單一來源)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain + llvm tools
+        uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: llvm-tools-preview
+
+      - name: Install Rocq(Coq)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y coq
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      # 先自測稽核器判別力:文件數字寫錯 / 規則命中 0 次 都必須紅
+      # (命中 0 次視為失敗 —— 文件被重整而規則靜默失效,是這類漂移的溫床)
+      - name: Docs check self-test(discriminative power)
+        run: python3 tools/docs_check_selftest.py
+
+      # 由實測重新產生 STATUS.json(不信任庫裡那份:它只是給人看的快照)
+      - name: Generate STATUS.json
+        run: python3 tools/gen_status.py
+
+      - name: Docs consistency check
+        run: python3 tools/docs_check.py
+
+      - name: Upload STATUS.json
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: STATUS-json
+          path: docs/STATUS.json
           if-no-files-found: ignore

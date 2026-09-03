@@ -1,0 +1,58 @@
+name: Nightly R3 probes
+
+# N5(健檢 §P3-13):`examples/r3_probe` / `r3_swap` / `r3_wf` 的三個宇宙級證人
+# 過去只被 `clippy --all-targets` 保證「能編」,從未被自動執行 ——
+# `docs/EXTERNAL-XCHECK.md` 與 `docs/ROCQ-TRACE.md` 的 R3 前測表全靠人手重跑。
+#
+# 本 workflow 補兩件事,缺一不可:
+#   1. **性質**:由 `tests/r3_nightly.rs` 的 `#[ignore]` 具名測試守住,
+#      計數寫成 `assert_eq!`(不是人讀表格,表格看不出回歸)。
+#   2. **人讀探針照跑**:輸出進 artifact,讓 EXTERNAL-XCHECK / ROCQ-TRACE
+#      的對表有可追溯的當日輸出 —— 但**判定權在 (1)**,不在這些文字。
+
+on:
+  schedule:
+    - cron: '17 3 * * *'          # 每日 03:17 UTC
+  workflow_dispatch:              # 人手觸發(改模型/改菜單後必跑)
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  r3-nightly:
+    name: R3 前測夜間回歸(宇宙級證人)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # ---- (1) 性質守門:計數是斷言,不是表格 ----
+      - name: Ignored (nightly-scale) probes
+        run: cargo test --release -- --ignored
+
+      # ---- (2) 人讀探針:輸出進 artifact,供文件對表 ----
+      # 4×6 是 CI 強制規模(M5 起);3×5 為既有對照點;
+      # r3_wf 的 3×3 是「倒掛宇宙」的決定性樣本(第二節)。
+      - name: Run examples (human-readable witnesses)
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          cargo build --release --examples
+          ./target/release/examples/r3_probe 4 6 8 2>&1 | tee artifacts/r3_probe_4x6x8.txt
+          ./target/release/examples/r3_probe 3 5 8 2>&1 | tee artifacts/r3_probe_3x5x8.txt
+          ./target/release/examples/r3_swap  3 6   2>&1 | tee artifacts/r3_swap_3x6.txt
+          ./target/release/examples/r3_wf    3 3   2>&1 | tee artifacts/r3_wf_3x3.txt
+
+      - name: Upload probe outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r3-probe-outputs
+          path: artifacts/
+          if-no-files-found: warn

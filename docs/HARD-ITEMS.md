@@ -122,6 +122,59 @@ CI 裡一個 20 分鐘的 job 會把「每次提交都跑形式化」變成人�
   退出碼 0,並把完整日誌(含版本行)收進 `docs/logs/<date>/`;
 - PR 附帶 CI 截圖/日誌連結,證明 9.2 與 8.20 兩格都綠。
 
+> ✅ / ⚠️ **2026-09-03 部分落地(N4)**,並修正一處既有事實:
+>
+> **已做**:CI 拆成 `rocq`(docker-coq-action + 8.20/9.2 兩格矩陣,`fail-fast: false`)
+> 與 `rocq-reconcile`(apt coq,單版本)兩個 job;每格上傳 `coqc --version` 版本行
+> 為 artifact。拆開的理由:對帳需要 `cargo`,容器內沒有,硬塞進去只會讓兩格都變慢;
+> 而定理庫的版本敏感度與對帳無關(對帳是兩個獨立實作的對比)。
+>
+> **修正**:本形式化**完全不用 MathComp** —— 全庫只有
+> `From Coq Require Import List Arith Bool Lia Classical Wellfounded`,
+> grep 不到任何 mathcomp / ssreflect 載入。故 CI 已不再安裝
+> `libcoq-mathcomp-ssreflect`:少一個相依就少一個跨版本更名的破口
+> (本檔原本擔心的「8.20 vs 9.2 的 MathComp 更名」對本專案不成立)。
+>
+> ⚠️ **未在本環境驗證(如實申報)**:沙箱**沒有 docker**,`docker-coq-action`
+> 這條路我無法實跑。已做的靜態檢查:無 MathComp 相依;`From Coq Require` 在
+> Rocq 9.x 仍是 `Stdlib` 的別名(會印 deprecation warning,Makefile 未把
+> warning 當錯誤);所用 lemma(`Nat.ltb_lt` / `Bool.orb_true_iff` /
+> `well_founded_lt_compat` / `NoDup` …)皆為長期穩定介面。
+> **首次真跑請看兩格的 job log**;若 9.2 格斷在命名空間,那就是本項要抓的東西
+> —— 斷在 PR 裡正是設計目的。
+
+**2026-09-03 實測(真實 runner + 真 docker,推翻上面三處猜測)**
+
+在 `p4.1` 分支上真跑 CI,三格全紅;每一格都打在上一段的猜測之外:
+
+| 失敗 | 實際原因 | 修正 |
+|---|---|---|
+| `rocq 9.2` | **`coqc` 不存在** —— Rocq 9 的二進位改名 `rocq`,且 `coqc` 子命令化為 `rocq compile` | 矩陣加 `coqc:` 欄位(8.20 → `coqc`,9.2 → `rocq compile`),`make -C rocq COQC=…` 覆寫 |
+| `coq 8.20` | **`Mirror.glob: Permission denied`** —— runner 的 uid 1001 ≠ 映像內 `coq` 使用者的 uid 1000,直接掛載 `$PWD` 無寫入權 | 改為唯讀掛載 + `cp -a /src /tmp/work`,在容器內可寫處建置 |
+| `coverage` | `edit.rs` 88.7%、`rep.rs` 88.6%(本地卻是 99.0% / 90.6%) | 見下方「覆蓋率 gate 不跨 LLVM 版本可移植」 |
+
+> 原本預期 9.2 會斷在**命名空間**,結果 `From Coq Require Import` 在 Rocq 9.2
+> 完全可用(只給一條 `"From Coq" has been replaced by "From Stdlib"` 的
+> deprecation warning)。本機 docker 實測:五個檔在 9.2 上 **0 error** 全數通過。
+> 不改寫成 `From Stdlib`,因為 Coq 8.20 沒有 `Stdlib`,改了那格反而紅。
+
+**附帶抓到的假綠**:`cp -a` 會把 `.vo` 連 mtime 一起複製進容器,`make` 判定為
+最新而印 `Nothing to be done`,**一行都沒編譯** —— 而「檢查 `.vo` 存在」的斷言
+照樣通過。故 CI 在建置前先 `make -C rocq clean`。
+
+**覆蓋率 gate 不跨 LLVM 版本可移植(新發現,已處理)**
+
+同一份碼,本機(rustc 1.98.0)量到 `edit.rs` 94/95、`rep.rs` 222/245;
+runner 上 `@stable`(當時 1.99.x)量到 `edit.rs` 86/97、`rep.rs` 217/245 ——
+**連分母都不一樣**(95 vs 97),是 LLVM 產出的行表不同,不是真的覆蓋率債。
+這種「本地綠、CI 紅」的門檻沒有判別力。處理方式二選一,兩個都做了:
+
+1. **鎖 toolchain**:`@stable` → `@1.98.0`(ci.yml 5 處 + nightly.yml 1 處),
+   讓本地與 CI 可比。代價:不再主動抓新 rustc 的破壞 ⇒ 升版改為刻意動作。
+2. **拉大 margin**:補上 `rep` 公開 API 的契約測試(`K::label` /
+   `is_normal_form` / `step` / `normalize` / `l8_check` / `apply` 的 None 分支,
+   此前完全沒有測試碰過)⇒ `rep.rs` 90.6% → **98.0%**(margin 0.6 → 8 個百分點)。
+
 ---
 
 ## #5 門檻的「可信度」問題:門太寬或太窄,都會讓全綠失去意義
@@ -144,8 +197,15 @@ CI 裡一個 20 分鐘的 job 會把「每次提交都跑形式化」變成人�
    > **best-of-n(min,cv 0.3–3.3%)** 判紅,median 降為環境污染警告。另加
    > `null` 環境標尺(跨機漂移 1.30× 可被完全抵消)、`--update` 同機刷基線、
    > `--tiny-us` 保留 informational 開關(預設 0 = 全硬判)。判別力由
-   > `tools/bench_gate_selftest.py`(9 情境)固化,已掛 CI。**固有盲区**:所有內核
+   > `tools/bench_gate_selftest.py`(13 情境)固化,已掛 CI。**固有盲区**:所有內核
    > 與 null 同步變慢時比值法無法區分,需用 `--assume-env-stable` 或重刷基線。
+   > ✅ **2026-09-03 健檢再修兩處判定式**(門檻「看起來在守、實際沒在守」):
+   > (P2-4)污染度 `contam = median/min − 1` 算了卻只拿來印,且文件中的 `tol − band`
+   > 方向是反的(越吵的內核容差越小)⇒ 改 **單向放寬** `min(contam − floor, 10pp)`;
+   > (P2-5)`null` 標尺 median 17 ns / MAD 1 ns,純噪聲就能讓它漂兩位數百分比,
+   > 而 `corr > 1` 單向放寬 ⇒ 紅線在 1.20×~1.34× 搖擺 ⇒ 加**顯著性門檻**
+   > `|corr−1| > 2 × null 相對 MAD` 才校正(實測 −11.8% 未過檻,不校正)。
+   > 兩處各由一對**配對差分**合成情境釘住(只有一個變因不同,舊版 gate 必錯一邊)。
 2. **coverage 改「關鍵路徑覆蓋」**:除行覆蓋外,加「每條具名測試必須真的執行其聲稱的符號」
    —— 用 `#[cfg(test)]` 計數器或 `cov_gate.py` 的 per-symbol 檢查;豁免只准「列舉原因 + 行級白名單」。
 3. **數字單一來源(single source of truth)**:新增 `tools/gen_status.py`,由
@@ -158,6 +218,16 @@ CI 裡一個 20 分鐘的 job 會把「每次提交都跑形式化」變成人�
 - CI 上 **連續 20 個 commit 無 flap**(用 Actions API 統計 red/green 序列),並把
   本輪的 `laminar/named_sexp` 失敗轉成一個可重現的基線修復 PR(附新基線與 n=7 統計);
 - ROADMAP 的測試計數由機器產生,我提交的 PR diff 中那幾行與 `STATUS.json` 逐字相同。
+
+> ✅ **2026-09-03 已落地(#3 + #4)**:`tools/gen_status.py`(N1)+ `tools/docs_check.py`
+> (N2)+ CI job `docs-consistency`,詳 `docs/STATUS.md`。與原規劃的**一處刻意偏離**:
+> 不讓 CI **自動回寫**文件,而是**每次重新量測後稽核**。自動回寫會讓「基準變快」
+> 被偷渡成「新基準」(與 bench gate 不自動 `--update` 同一理由),且回寫的 diff
+> 無人審閱;稽核則強制每次 PR 都由人解釋數字為何變動。
+> 本輪落地即抓出 4 處過期數字(`46/47 具名測試` → **50**,分布在
+> `ROADMAP.md` / `ROCQ-PLAN.md` / `R3-RESEARCH.md` / `ROCQ-TRACE.md`),並修了
+> 健檢 §P3-9 的宇宙規模註解(35,280/105,216 → 74,088/810,000,且以 `assert_eq!` 釘住)。
+> **#3 剩餘的「據此回寫」** 降級為可選:數字已由 CI 把關,手抄不再有漂移風險。
 
 ---
 

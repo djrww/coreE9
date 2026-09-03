@@ -252,7 +252,14 @@ pub fn r0_lex(src: &str) -> Vec<R0Token> {
                 if i < b.len() && b[i] == b'&' {
                     i += 1;
                     push(&mut toks, R0TokKind::AndAnd, s, i);
-                } else if i + 3 < b.len() && &src[i..i + 3] == "mut" {
+                } else if i + 3 <= b.len() && &b[i..i + 3] == b"mut" {
+                    // ★ 兩處修正(健檢 P0-1):
+                    //   (a) 比**位元組** `b[i..i+3]` 而非 `src[i..i+3]`。後者是
+                    //       `&str` 切片,`i+3` 不保證落在 UTF-8 邊界上 ——
+                    //       `&` 後接非 3 位元組字元(如 `&🦀`、`&éé`、`&Привет`)
+                    //       會直接 panic,違反 §2.3「全化、永不 panic」。
+                    //   (b) 邊界由 `<` 改 `<=`:否則 `&mut` 剛好在輸入結尾時
+                    //       會被切成 `Amp` + `Mut` 兩個 token(off-by-one)。
                     i += 3;
                     push(&mut toks, R0TokKind::AmpMut, s, i);
                 } else {
@@ -1223,9 +1230,23 @@ impl R0Parser {
         }
     }
 
+    /// 關閉棧頂節點(與 `open` 配對)。
+    ///
+    /// **棧空時為 no-op**。原因不是「懶得處理」,而是錯誤回收合法地會退過頭:
+    /// `stmt_err` / `item_err` 走 `unwind_to(frame)`,而 `frame` 是**語句層**的
+    /// 棧深 —— 像 `else if` 這種右遞歸構造,內層與外層共用同一個 `frame`,
+    /// 內層一旦回收就把外層的節點也一起退掉了,外層接著的 `close()` 便無節點可彈
+    /// (最小例:`"fn n(){if 1{}else if"`,`else if` 截斷於 EOF)。
+    ///
+    /// 舊版寫 `self.stack.pop().unwrap()` ⇒ **panic**,直接違反 §2.3
+    /// 「任意輸入必回樹、永不 panic」。與 `unwind_to`(本來就有 `len()` 保護)
+    /// 一致化後,`close()` 成為總化的最後一道保險。
+    /// 回歸防線見 `tests/laws.rs::test_law_r0_error_paths_total`。
     fn close(&mut self) {
-        let id = self.stack.pop().unwrap();
-        self.depth -= 1;
+        let Some(id) = self.stack.pop() else {
+            return;
+        };
+        self.depth = self.depth.saturating_sub(1);
         self.finalize(id);
     }
 
@@ -2063,6 +2084,76 @@ mod tests {
             "@@|",
         ] {
             r0_lexical_invariants(src).unwrap_or_else(|e| panic!("{:?}: {}", src, e));
+        }
+    }
+
+    /// 健檢 H1(a):`&mut` 必須切成**一個** `AmpMut` token,
+    /// 不論它後面還有沒有位元組(舊版 `i + 3 < b.len()` 讓 EOF 處的
+    /// `&mut` 退化成 `Amp` + `Mut`,同一段程式因上下文而切法不同)。
+    #[test]
+    fn r0_lex_amp_mut_at_eof() {
+        fn kinds(src: &str) -> Vec<String> {
+            r0_lex(src)
+                .iter()
+                .map(|t| format!("{:?}", t.kind))
+                .collect()
+        }
+        // 末尾(舊版會錯)
+        assert_eq!(kinds("&mut"), ["AmpMut"], "trailing `&mut` (bare)");
+        assert_eq!(
+            kinds("a&mut"),
+            ["Ident", "AmpMut"],
+            "trailing `&mut` (after ident)"
+        );
+        assert_eq!(
+            kinds("&mut&mut"),
+            ["AmpMut", "AmpMut"],
+            "trailing `&mut` (twice)"
+        );
+        assert_eq!(
+            kinds("fn f() { let r = &mut"),
+            [
+                "Fn", "Trivia", "Ident", "LParen", "RParen", "Trivia", "LBrace", "Trivia", "Let",
+                "Trivia", "Ident", "Trivia", "Eq", "Trivia", "AmpMut"
+            ],
+            "trailing `&mut` (in context)"
+        );
+        // 中間(舊版本來就對,釘住不許回歸)
+        assert_eq!(kinds("&mut x"), ["AmpMut", "Trivia", "Ident"]);
+        assert_eq!(kinds("&mutx"), ["AmpMut", "Ident"]);
+        assert_eq!(kinds("&&"), ["AndAnd"]);
+        // 平鋪不變量必須繼續成立(切法變了,覆蓋不能變)
+        for src in ["&mut", "a&mut", "&mut&mut", "fn f() { let r = &mut"] {
+            r0_lexical_invariants(src).unwrap_or_else(|e| panic!("{:?}: {}", src, e));
+        }
+    }
+
+    /// 健檢 H1(b):`&` 後接**非 3 位元組**的 UTF-8 字元不得 panic。
+    /// 舊版 `&src[i..i + 3]` 是 `&str` 切片,`i+3` 落在多字元位元組中間
+    /// 就 panic(`&🦀` / `&éé` / `&Привет` / `let x = &αβ;` 全中)。
+    /// 這是 §2.3「任意輸入必回樹、永不 panic」的回歸防線。
+    #[test]
+    fn r0_lex_non_ascii_after_amp() {
+        // 每個輸入的最小位元組長度都 ≥ 5,確保舊版真的會走進 `src[i..i+3]`。
+        let cases: &[&str] = &[
+            "&\u{1F600}",                                  // 4 位元組:emoji
+            "&\u{1F600}x",                                 // 4 位元組 + 後綴
+            "&éé",                                         // 2 + 2 位元組(拉丁補充)
+            "&\u{41F}\u{440}\u{438}\u{432}\u{435}\u{442}", // 2 位元組:西里爾
+            "let x = &αβ;",                                // 2 位元組:希臘(合法 Rust 識別字)
+            "fn f() { let r = &\u{41F}\u{440}\u{438}; }",  // 合法程式 + 非 ASCII 識別字
+            "&\u{5F20}\u{4E09}",                           // 3 位元組:CJK(原本就不 panic)
+            "a&\u{1F600}b",                                // 混在中間
+            "&\u{1F600};\n\t",                             // 後接分隔符
+            "&&\u{1F600}",                                 // `&&` + 非 ASCII
+        ];
+        for src in cases {
+            // (1) 詞法器不得 panic,且平鋪不變量成立
+            let toks = r0_lex(src);
+            r0_lexical_invariants(src).unwrap_or_else(|e| panic!("{:?}: {}", src, e));
+            assert!(!toks.is_empty(), "{:?}: must produce tokens", src);
+            // (2) 解析器也不得 panic(全化:必回樹或如實申報機器界)
+            let _ = r0_parse(src);
         }
     }
 

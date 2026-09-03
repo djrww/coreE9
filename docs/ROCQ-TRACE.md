@@ -54,6 +54,21 @@ Acc 反向歸納恰給「∀a′, r a a′ → P a′」的推進 IH)。
 | 4×6(+過濾,=CI)| 623,616 | 635,424 | 0 違反 | 635,424/635,424 | 0 偏離 | 0 |
 | 4×6(**無過濾**)| 3,111,696 | 2,443,506 | 0 違反 | 2,443,506/2,443,506 | 0 偏離 | 0 |
 
+> **2026-09-03(N5)**:上表過去只有人手重跑的 `examples/r3_probe` 輸出作依據。
+> 盤點後:其中 P1(start 不變)/ P2(可回合)/ 多正規形 = 0 三欄,已由
+> `test_law_L9_scaled_space_joinable`(M5 起跑 4×6 = 623,616 狀態)與
+> `test_law_L9b_parallel_moves_exact_swap` **在 CI 內守住**;P3(Guarded≡Raw)
+> 該測試只比 `.len()`、未比集合,已由 `tests/r3_nightly.rs` 補上**集合相等**。
+>
+> 但真正沒有保護的是 `examples/r3_wf` 的**第二節(倒掛宇宙)**:
+> `rep::enumerate_states` 的構造排除倒掛區間(`end > start`),所以任何以它為
+> 宇宙的測試,對「R3 是否需要 `wf_state` 前提」都是**套套邏輯** —— 這正是
+> `r3_wf` 第一節自己印出的警告。決定性樣本是自行枚舉、允許倒掛的宇宙,實測
+> (3 事件 × 座標 0..=3):**32,768 狀態 / 24,768 個含倒掛 / 387 peers /
+> 非精確交換 0** ⇒ 即使允許倒掛也全數精確交換。這個反直覺結論撐著本檔 R3
+> 「wf 前提可能不必要」的路線,現由 `tests/r3_nightly.rs` 的 `#[ignore]`
+> 具名測試以 `assert_eq!` 釘住,由 `.github/workflows/nightly.yml` 每日執行。
+
 推論(寫進 Phase 3 的定理陳述):
 * `ct_join_exact`:兩步不同後繼時,`apply (apply s ra) rb = apply (apply s rb) ra`(等式級,非 merely joinable);
 * `ct_guard_redundant`:CT 上 `applicable s CT Guarded = applicable s CT Raw` ⇒ µ 遞減是定理而非假設;
@@ -158,10 +173,50 @@ Rocq 側仍需「候選集變化 ⇒ min 不變」的刻畫。
     異 id ⇒ `apply_r1_comm_ev` 給共同中點,兩側各補一步
     (存在性用 `r1_apply_some` + `r1_apply_keeps` 的 id-map 不變性;
     合法性用 `ct_rule_survives`)。
-- 仍未完成(不虛報):**Guarded 版** step_ct 的 WCR(需「修剪只刪紅邊」
-  的遞減計量,或先證 Guarded≡Raw 於可達態)、**R4_ct_confluent**
-  (newman + R2 + R3 的組裝,需先把 R3 接到 Guarded 或論證 Raw 足夠)、
-  唯一正規形推論。ROADMAP Phase 3 行改標「Raw 完成 / Guarded·R4 進行中」。
+- 仍未完成(不虛報):**Guarded 版** step_ct 的 WCR、**R4_ct_confluent**
+  (newman + R2 + R3 的組裝)、唯一正規形推論。ROADMAP Phase 3 行改標
+  「Raw 完成 / Guarded·R4 進行中」。
+
+  **2026-09-03:兩條既有路線的其中一條已被實測否決(不虛報)**。
+  上文寫的「或先證 Guarded≡Raw 於可達態」—— **無條件版為假**:
+  `runtime ≠ []` 時,CT 的規範 cut 可能只消掉區間重疊而不消掉任何紅邊,
+  遂被 Guarded 濾掉。實測 8,000 狀態 × 單條 runtime 標記中有 **4,680** 個分歧
+  (反例與測試見 `docs/R3-RESEARCH.md` §2.2 註、`tests/laws.rs` 的
+  `test_policy_guarded_is_not_redundant_when_runtime_suppresses_red_edge`)。
+  若「可達態」意指 `runtime = []`(CT 菜單不改 runtime,`enumerate_states`
+  生成的狀態亦為空),則該捷徑可用;否則必須走第二條路線。
+
+  **剩下那條路線(已確認可行,尚未形式化)**:直接論證鑽石的兩條補步仍為
+  Guarded。核心是「兩條規則移除的紅邊集合互斥」——
+  `ra` 只動 `ia`、故只移除涉及 `ia` 的邊;`rb` 只動 `ib`、只移除涉及 `ib` 的邊;
+  交集只可能是邊 `(ia, ib)`,而「`ra` 移除它」⇒ `istart ia < istart ib`,
+  「`rb` 移除它」⇒ `istart ib < istart ia`,兩者矛盾 ⇒ 交集為空。
+  配合「兩規則皆 Guarded ⇒ 各移除 ≥1 條」,得 `|E_red(c)| < |E_red(sa)|`。
+  需要新建的基建:`red_edges_aux` 的成員刻畫、`uniq_ids` 下的 `NoDup`、
+  以及「縮短只刪不增」的單調性(估 200–400 行)。
+
+**2026-09-03 進度:基建已落地(`rocq/theories/RedEdges.v`,254 行,已掛進
+`make -C rocq`,`Print Assumptions` 全數 "Closed under the global context")**。
+
+| 引理 | 內容 |
+|---|---|
+| `ct_red_pred` | 把 `red_edges_aux` 內的 `let p` 提到命名層(逐字對應),使後續可陳述 |
+| `shorten_rel` + `r1_apply_shorten` | `r1_apply` 的結構刻畫:右端點變小、其餘欄位逐字不變 |
+| `shorten_rel_ids` | 縮短不改 id 列 |
+| `i_overlap_shorten_{l,r}` | 右端點變小 ⇒ 重疊只減不增(`lia`) |
+| `ct_pred_shorten_{l,r}` | 同上,但推到 `red_edges_aux` 的完整判定述詞(含 storage / kind / runtime) |
+| **`red_edges_aux_shorten_incl`** | **主定理:縮短後的紅邊是原本的子集** |
+| `red_edges_shorten_state` | AState 層版本(R1 不改 runtime,故 `rt` 相同) |
+
+證明要點一則(供後人省時):歸納時若用 `simpl`,它會把 `red_edges_aux`
+一併展開,導致 `rewrite red_edges_aux_cons` 對不上 —— 必須用 `cbn [app]`
+只化簡串接。另一處:被縮短的那個事件在 `l'` 裡是 `e'`、在 `l` 裡是 `e`,
+兩者**不相等**,故 `in_map_iff` 的見證要換成 `e`,配對相等由
+`ev_id e' = ev_id e` 補上。
+
+仍缺(下一輪):(a)「不涉及 i 的邊在縮短前後**等價**」(本檔只有單向包含);
+(b) `uniq_ids -> NoDup (red_edges s)` —— 有了它才能把子集關係換成長度不等式,
+完成計數論證,進而得到 `wcr step_ct` 與 `R4_ct_confluent`。
 
 **工程教訓(供後續輪次省時,已寫進 `WCRUtil.v` 頭註)**:
 1. `nth_error` 按 nat 遞歸,遇到未約簡的 `trim_at q i c` 即卡死 ⇒ 改走
@@ -240,12 +295,28 @@ CI(`.github/workflows/ci.yml` → job `rocq`):apt 裝 coq + mathcomp →
    `scripts/setup_dev.sh` 一鍵重建(apt 需 sudo;Rust 工具鏈重裝約 10 秒)。
 4. `rocq-of-rust` 路線未採用(理由見 ROCQ-PLAN §4.2);若後續需要「實作層」
    驗證(如 `rep::apply` 無 panic),可作 Phase 6 選配。
-5. **本輪如實修正兩處文件口徑**:(a)「46 具名測試」→ 實跑 `cargo test --all` = 47
+5. **本輪如實修正兩處文件口徑**:(a)「46 具名測試」→ **2026-09-03 真機實測:Rocq 9.2 全綠(`p4.1` 分支 + 真 docker)。**
+
+* 二進位改名:9.x 沒有 `coqc`,改用 `rocq compile`(子命令;`rocq c` 亦可)。
+* `rocq --version` → `The Rocq Prover, version 9.2`(OCaml 4.14.2)。
+* **`From Coq Require Import` 在 9.2 仍可用**,只給 deprecation warning
+  (`"From Coq" has been replaced by "From Stdlib"`,`deprecated-since-9.0`)。
+  五個檔 0 error 全數通過。刻意**不**改寫成 `From Stdlib`:Coq 8.20 無此
+  命名空間,改了 8.20 那格就紅 —— 這是「同時支援兩個版本」的直接代價。
+* 映像 repo 也不同:`coqorg/coq` 最高只到 8.20,Rocq 9 在 `rocq/rocq-prover`
+  (9.0/9.1/9.2/9.3)。故 CI 不用 `docker-coq-action`(它只認前者),改為直接
+  `docker run`,兩個映像共用同一段指令。
+
+實跑 `cargo test --all` = 53
    (15 單元 + 32 集成;本輪新增 L9b′ 後為 32);(b) `docs/BENCH.md`/`bench/BASELINE.json`
    所依託的 bench gate 曾在 CI 與本地**同時紅**(原因非代碼回歸:基線單機單次採樣
    + µs 級指標以 median 判定)。2026-09-02 已修:`tools/bench_gate.py` 改採
    **best-of-n** 判据 + `null` 環境標尺校正 + 同機 `--update` 基線 +
-   `tools/bench_gate_selftest.py`(9 情境判別力自測,掛 CI)。本沙箱實跑:
-   fmt/clippy/doc/test 47/47/reconcile 19 項/rocq/coverage/bench **全綠**。
+   `tools/bench_gate_selftest.py`(2026-09-03 起為 **13** 情境判別力自測,掛 CI)。
+   本沙箱實跑:fmt/clippy/doc/reconcile 19 項/rocq/coverage/bench **全綠**。
+   2026-09-03 健檢並修了 gate 判定式本身兩處(污染度算了沒用且方向反、
+   null 底噪挪動紅線),見 `docs/BENCH.md`;另修 `tools/cov_gate.py` 的四條
+   fail-open 防線(空報告 / 模組缺席 / 只剩被過濾的 bin / 同名 basename
+   皆須判紅),並入庫 `tools/cov_gate_selftest.py`(9 情境,掛 CI)。
    **仍保留的限定**:CI runner 與基線不同機(4 核 vs 2 核),首次 CI 跑後需在
    該機 `--update` 一次才算「同境基線」;在此之前不宣稱「全管線綠(含 CI)」。

@@ -49,6 +49,23 @@
 | 3×6 + distinct-start 過濾(=CI 宇宙族) | 35,280 | — | 10,668 | 精確交換 **10,668/10,668** |
 | 4×5 + 過濾 | 105,216 | — | 100,392 | 精確交換 **100,392/100,392** |
 | 4×6 + 過濾(**CI 現有規模**) | 623,616 | 1,053,672 | 635,424 | P1 違反 0 / P2 違反 0 / Guarded≡Raw / 多正規形 0 |
+
+> **2026-09-03:P3(Guarded≡Raw)的範圍修正 —— 原結論只在 `runtime = []` 的宇宙上成立。**
+> 本表所有宇宙都由 `rep::enumerate_states` 產生,**構造上 `runtime` 恆為空**;
+> `examples/r3_wf` 的倒掛宇宙亦然。故「Guarded≡Raw」從未在 `runtime ≠ []` 的
+> 狀態上被檢驗過。實測(3 事件 × 座標 0..=4,8,000 個宇宙狀態 × 枚舉單條
+> runtime 標記):**4,680 個狀態 Guarded 與 Raw 分歧**。
+>
+> 最小反例(已寫成 `test_policy_guarded_is_not_redundant_when_runtime_suppresses_red_edge`):
+> `a = [0,10) Mut`、`b = [2,4) Sh`、同 storage、`runtime = [(0,1)]`。
+> 這條邊本該是紅邊,但被 runtime 移出 `E_red`。CT 的規範 cut 把 `a` 剪到 2,
+> 消掉了區間重疊,卻**沒有消掉任何紅邊**(0 → 0,不嚴格遞減)⇒ Guarded 濾掉、
+> Raw 保留。
+>
+> ⇒ 規劃中的 `ct_applicable_guard_redundant` 不是無條件定理。這也**否決了 R3
+> Guarded 版 WCR 的捷徑**:不能由「集合相等 ⇒ `step_ct = step_ct_raw`」推出。
+> 好消息是結論本身仍成立:同批掃描中 Guarded 單步的 1,590 個 peers,不可回合
+> **0**(見 `tests/r3_nightly.rs::test_r3_guarded_wcr_holds_even_with_runtime`)。
 | 4×6 **不加過濾**(2.98× 大) | 3,111,696 | 4,550,076 | 2,443,506 | 精確交換 **2,443,506/2,443,506**,紅邊增加 0 |
 | 3×7 不加過濾 | 175,616 | 159,348 | 41,664 | 全綠 |
 
@@ -103,6 +120,8 @@ Iteration 4(Rocq Phase 3)—— 目標:R3 具體 WCR ⇒ R4 具體 CR 定理
     倒掛宇宙 P2 綠、NaTT R1 超集終止 YES)。
  1. 鏡像收斂:把 §2.4 的「過濾僅限樣本」寫進 ROCQ-TRACE;鏡像補一條
     `ct_applicable_guard_redundant` 引理(Guarded = Raw on CT)。            [1 人日]
+    ⚠️ **2026-09-03:此引理無條件版為假,必須帶 `st_runtime s = []`(或等價)
+    前提** —— 見下方「P3 的範圍修正」。
  2. ✅(2026-09-03)`ct_step_start_invariant` 已證 —— 見 ConcreteWCR.v ④。
  3. ✅(2026-09-03 第四輪)候選集單調的落地形式與原計劃不同:原敘述
     「filtered-list 逐字不變」經證實**數學為假**,改以 istart 值列層
@@ -130,7 +149,7 @@ Iteration 4(Rocq Phase 3)—— 目標:R3 具體 WCR ⇒ R4 具體 CR 定理
 ```sh
 sh scripts/setup_dev.sh                       # coq + mathcomp + rust
 export PATH="$HOME/.cargo/bin:$PATH"
-cargo test --all                               # 47 具名測試(含本輪新增的 L9b′)
+cargo test --all                               # 53 具名測試(含本輪新增的 L9b′)
 make -C rocq && make -C rocq reconcile         # 鏡像 + 19 樣本點 kernel 複驗
 cargo build --release --examples
 ./target/release/examples/r3_probe  4 6 4 --nofilter

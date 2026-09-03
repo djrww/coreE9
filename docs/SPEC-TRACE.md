@@ -2,7 +2,7 @@
 
 > **紀律:律先於碼 —— 每律一個具名測試;律不過,碼不合。**
 > 本表即該紀律的字面落實(P1 #8):規格條文 → 具名測試 → 代碼符號,一表窮盡。
-> 基線:第三迭代(+ Rocq Phase 0–2)· fmt / clippy -D warnings / test(47)/ doc -D warnings / cov gate **綠**;
+> 基線:第三迭代(+ Rocq Phase 0–2)· fmt / clippy -D warnings / test(**50**)/ doc -D warnings / cov gate **綠**;
 > bench gate 於 2026-09-02 **重寫後轉綠**(本沙箱實跑;舊基線是單機單次採樣所致之假紅,修法與統計依據見 `docs/BENCH.md`)。本表對「綠」的定義仍是**實跑結果**,不是文件宣稱。
 
 ---
@@ -21,7 +21,7 @@
 `tools/rocq_reconcile.py`(Rust 實例 ↔ Rocq 計算,kernel 複驗 19 樣本點;
 已抓出並修正 R4Runtime 尾插/頭插分歧)+ CI job `rocq`。
 
-## 〇、測試全量清單(47 具名測試)
+## 〇、測試全量清單(53 具名測試)
 
 **CL0 載體 — 九律 + 編輯單體 + 定理 + 語義面(31,`tests/laws.rs`)**
 
@@ -93,6 +93,7 @@
 | §2.3 | ERROR 全化:任意輸入必回樹 | **`test_law_L7_error_totalization`** | `parse::parse` / `Tree::validate_continuity` | ✅ |
 | §2.3 | L7a 無假錯誤(合法程式 0 ERROR) | `test_law_L7a_no_false_errors` | `parse::parse` / `Tree::has_error` | ✅ |
 | §2.3 | L7b 極大錯誤跨度互不嵌套 + 迭代淨化 | `test_law_L7b_structural_maximality` | `Tree::maximal_error_spans` | ✅ |
+| §2.3 | **機器界如實申報**:深嵌套 ⇒ `Err(Depth)`,不許 panic(健檢 P0-2)| **`test_l7b_depth_reported_not_panicked`** | `tree::l7b_evaluate` → `Result<_, ParseIssue>` | ✅(本次修復)|
 | §3.1 | 跨度嵌套(laminar)+ L5 | `test_law_L5_laminar_nesting` | `Tree::laminar_ok` | ✅ |
 | §3.2 | liveness 三軌(lexical / NLL / referent) | `test_theorem_T2_interval_graphs_are_perfect`(承載) | `ast`(三軌 liveness) | ✅ |
 | §3.3 | 衝突圖:區間圖 ⊂ 弦圖 ⊂ 完美圖 | `test_theorem_T2_interval_graphs_are_perfect` | `ast`(衝突圖構造) | ✅ |
@@ -102,7 +103,7 @@
 | §4.2 | L8:菜單每規則嚴格遞減 μ | `test_law_L8_red_edge_decreasing` | `rep::Menu` / `rep::Rule` | ✅ |
 | §4.2 | L8:μ ⇒ 終止保證 | `test_law_L8_measure_is_guaranteeing_termination` | `rep::Policy`(μ 計算) | ✅ |
 | §4.3 | L9:SN + WCR ⇒ CR(Newman)| `test_law_L9_unique_normal_form` + `test_law_L9_critical_pairs_joinable` | `l9newman::newman_check` | ✅ |
-| §4.3 | L9b′ 精確交換 + 側條件冗餘 + 紅邊單調(Rocq R3 的鏡面)| `test_law_L9b_parallel_moves_exact_swap` | `rep::{apply, Menu::applicable, AState::red_edges}` | ✅(Rust 窮舉)/ ✅ Raw 版(`R3_ct_wcr_raw`,2026-09-03)/ 🔶 Guarded 版 WCR 仍待證 |
+| §4.3 | L9b′ 精確交換 + 側條件冗餘 + 紅邊單調(Rocq R3 的鏡面)| `test_law_L9b_parallel_moves_exact_swap` + `test_policy_guarded_is_not_redundant_when_runtime_suppresses_red_edge`(後者釘住「側條件冗餘」**僅**在 `runtime = []` 成立)| `rep::{apply, Menu::applicable, AState::red_edges}` | ✅(Rust 窮舉)/ ✅ Raw 版(`R3_ct_wcr_raw`,2026-09-03)/ 🔶 Guarded 版 WCR 仍待證 |
 | §4.3 | L9 反例通道(機器找反例)| `test_law_L9_naive_menu_finds_counterexample` | `rep::enumerate_states` | ✅ |
 | §4.4 | 錨定保持:事實攜帶可回跳 span | `test_law_L6_*`(錨位址並檢)| `ast`(事實層 span)| ✅ |
 | §5.1 | 詞法 DFA、平鋪、trivia 保留 | `test_law_L1_lexical_tiling` / `lex_lexical_invariants` | `lex::lex` | ✅ |
@@ -127,6 +128,8 @@
 | 節點級 Unsupported(規則/位置,附 note)| `r0_parse_unsupported_nodes` | `R0Node{kind: Unsupported, note, span}` | ✅ |
 | 機器界如實申報(Depth 256→64 工程界)| `r0_parse_depth_honest` | `R0ParseIssue::Depth` | ✅ |
 | 決定論 + 具名投影 | `r0_parse_determinism_named_sexp` | `R0Tree::named_sexp` | ✅ |
+| §5.1 `&mut` 詞法:切成單一 `AmpMut`,EOF 處亦然(健檢 P0-1a)| **`r0_lex_amp_mut_at_eof`** | `r0::r0_lex` | ✅(本次修復)|
+| §2.3 全化:`&` 後接非 ASCII 不得 panic(健檢 P0-1b)| **`r0_lex_non_ascii_after_amp`** | `r0::r0_lex` / `r0::r0_parse` | ✅(本次修復)|
 
 > R₀ 遞歸界:規格首取 256;第一迭代因 2MB 測試線程棧實測不安全,下修 64
 > (優先級語法鏈約 15 幀/層),並以 `r0_parse_depth_honest` 如實申報 —— 界本身
@@ -138,6 +141,7 @@
 
 | # | 缺口 | 狀態 |
 |---|---|---|
+| 1a | **「全化」的口徑需說清楚**:`parse` 在遞迴 ≥ `RECURSION_LIMIT` 時回 `Err(Depth)`(機器界),因此「全化」= **永不 panic + 零丟失 + 機器界如實申報**,不是「永不 Err」。2026-09-03 健檢發現 `tree::l7b_evaluate` 內部 `parse(..).unwrap()` 會在深嵌套上 panic,已改為回傳 `Result` 並補 `test_l7b_depth_reported_not_panicked` | **已修正**(本次)|
 | 1 | L7 全化無獨立具名測試(曾被子測試合併吸收)| **已補**(迭代 1 + 2):`test_law_L7_error_totalization` + `test_law_regression_fixtures` + `test_law_semantic_extract_breadth`(語義面不 panic);修復:哨兵跨度泄漏、`ast::extract` Root 外殼未穿透、半截 4 處 `unwrap` |
 | 2 | R₀ `unsupported` 僅詞法/詞級 | **已補**:節點級 Unsupported + `test_law_r0_unsupported_keyword_matrix`(16 關鍵字逐一申報) |
 | 3 | L9「反例通道」是**機器找反例**,非**證明無反例** | 已強化(非消除):並行 + 4 事件 × 6 座標(623,616 狀態 × 635,424 臨界對,0 違反);「證明無反例」仍是 P3 #12(形式化)範圍 |
@@ -151,7 +155,7 @@
 ## 四、防線(CI,`.github/workflows/ci.yml`)
 
 `push main / PR` → `cargo fmt --all --check` → `cargo clippy --all-targets -- -D warnings`
-→ `cargo test --all`(上表 46 具名測試即驗收合同)→ `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
+→ `cargo test --all`(上表 **53** 具名測試即驗收合同)→ `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
 → **coverage gate**(核心 ≥90%,ast ≥75% 豁免,`tools/cov_gate.py`)
 → **bench gate**(`hotpaths` ±25%,`tools/bench_gate.py`)。
 

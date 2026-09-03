@@ -1,7 +1,8 @@
 //! 熱點內核基準(P1 #7;零依賴自研計時器,harness = false)。
 //!
 //! 運行:`cargo bench --bench hotpaths [-- --reps 11 --newman-reps 5]`。
-//! 輸出:人讀表格 + 一行 `BENCH_JSON:{...}`(median / MAD / min / max,ms/樣本)。
+//! 輸出:人讀表格(**自動換單位** ns/µs/ms,見 `fmt_dur`)+ 一行
+//!       `BENCH_JSON:{...}`(median / MAD / min / max,**一律 ms/樣本**)。
 //! 比較:`tools/bench_gate.py`(對 `bench/BASELINE.json`,容差 ±25%,經 null 內核
 //!       漂移校正 + MAD 雜訊帶)。基線重生成:`--emit-baseline bench/BASELINE.json`。
 //!
@@ -84,10 +85,38 @@ fn measure(name: &str, samples: &[String], reps: usize, iters: usize, f: impl Fn
         samples: samples.len(),
     };
     println!(
-        "{:<18} {:>9.4} ms/樣本  (MAD {:.3} · min {:>8.4} · max {:>8.4} · n={} × {} 樣本)",
-        name, stat.med, stat.mad, stat.min, stat.max, stat.reps, stat.samples
+        "{:<20}{:>10}  (MAD {:>10} · min {:>10} · max {:>10} · n={} × {} 樣本)",
+        name,
+        fmt_dur(stat.med),
+        fmt_dur(stat.mad),
+        fmt_dur(stat.min),
+        fmt_dur(stat.max),
+        stat.reps,
+        stat.samples
     );
     stat
+}
+
+/// 依量級自動換單位,並保留 ≥3 位有效數字。
+///
+/// 為什麼需要它:固定 `{:.4} ms/樣本` 對本表最快的兩個內核是**零資訊** ——
+/// `null` 的 0.000016 ms 會印成 `0.0000`(0 位有效數字),`lex` 的 0.000484 ms
+/// 印成 `0.0005`(1 位)。表格從「可判讀」退化成「看起來有在印東西」。
+/// 換單位後同一欄能同時容納 16 ns 與 5 ms 而不失真。
+///
+/// 注意:**只有人讀表格換單位**;`BENCH_JSON` 與 `--emit-baseline` 一律維持
+/// `ms/樣本`,`bench/BASELINE.json` 的單位不受影響。
+fn fmt_dur(ms: f64) -> String {
+    let ns = ms * 1e6;
+    if ns < 1_000.0 {
+        format!("{ns:.1} ns")
+    } else if ns < 1_000_000.0 {
+        format!("{:.1} µs", ns / 1e3)
+    } else if ms < 1_000.0 {
+        format!("{ms:.3} ms")
+    } else {
+        format!("{:.3} s", ms / 1e3)
+    }
 }
 
 struct Args {
@@ -185,8 +214,13 @@ fn main() {
     let mut out: Vec<(String, Stat)> = Vec::new();
 
     // ★ null 參考內核:與被測內核走同一份語料、同一套計時結構,但不含被测代碼。
-    // iters=20:單遍 null 只有 ~10 ns/樣本,會淹死在計時噪聲;重複 20 遍把它
-    // 推到 ~0.2 µs/樣本(每輪 ~0.2 ms),仍是「同一份語料的纯記憶體掃描」。
+    //
+    // iters=20 的作用(2026-09-03 更正):它**不**改變 ms/樣本 —— 該值在
+    // `measure()` 裡已除以 `samples × iters`,實測 null 恆為 ~16 ns/樣本
+    // (舊註解稱「推到 ~0.2 µs/樣本」,實測為 0.016 µs,差 12 倍)。
+    // iters 真正抬高的是**每輪的總計時區間**:16 ns × 1000 樣本 × 20 遍
+    // ≈ 0.32 ms/輪,讓單輪測時遠離計時器解析度與排程抖動 —— 這半句才對。
+    // 對照:iters=1 時每輪只有 ~16 µs,量到的主要是雜訊。
     let null_stat = measure("null(參考)", &mixed, args.null_reps, 20, |s| {
         std::hint::black_box(null_kernel(s));
     });
@@ -271,6 +305,7 @@ fn main() {
 
     println!("----------------------------------------------------------------------");
     println!("  (中位數 over n 輪;語料:500 合法 + 500 垃圾 + 200 半截;null 為環境參考)");
+    println!("  (耗時欄自動換單位以保留有效數字;BENCH_JSON 一律 ms/樣本)");
 
     let json = out
         .iter()
