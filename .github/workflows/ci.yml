@@ -54,10 +54,20 @@ jobs:
 
   rocq:
     name: rocq gate(Phase 0–3:mirror + WCRUtil + Newman + RedEdges + 對帳)
-    # 用官方 coqorg/coq:8.20 容器**固定** Coq/MathComp 版本 —— ubuntu-latest 的 apt
+    # 用官方 coqorg/coq:8.20 容器**固定** Coq 8.20/opam 版本 —— ubuntu-latest 的 apt
     # 只帶很舊的 coq(≈8.16),會讓本庫的定理集編譯失敗;容器版本即本機驗證版本。
+    #
+    # 重要:此鏡像默認 USER=coq(UID 1000),而非 root。GitHub 的 job container 把
+    # _runner_file_commands(Docker-mount,屬 runner UID 1001)掛進容器,非 root 的
+    # 容器使用者無寫入權限,actions/checkout 會以 EACCES 失敗(見 actions/checkout
+    # #956 / #1576)。官方支援路徑 = 以 root 執行容器 + 明確指定 opam root。
     runs-on: ubuntu-latest
-    container: coqorg/coq:8.20
+    container:
+      image: coqorg/coq:8.20
+      options: --user root
+      env:
+        OPAMROOT: /home/coq/.opam   # opam switch 屬 coq 使用者所有;root 需指回同一 root。
+        OPAMROOTISOK: "1"           # 允許 opam 以 root 執行(不因「not recommended」中斷)。
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
@@ -70,11 +80,19 @@ jobs:
       - name: Install stable toolchain(rocq_reconcile 需 Rust 執行期事實來源)
         uses: dtolnay/rust-toolchain@stable
 
+      # 關鍵:把 opam switch 的 bin 併入 $PATH(HOME=/github/home),並保留 cargo bin。
+      # 這兩個子 shell 只對本 step 生效,不互相污染。
       - name: Build theorem library(鏡像 → WCRUtil → Newman → SN → WCR → R3Guard)
-        run: make -C rocq
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          eval "$(opam env)"
+          make -C rocq
 
       - name: Reconcile(Rust 實例 ↔ Rocq 鏡像,生成 reconcile_gen.v 並複驗)
-        run: make -C rocq reconcile
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          eval "$(opam env)"
+          make -C rocq reconcile
 
   coverage:
     name: coverage gate(core ≥ 90%,ast ≥ 75% 豁免)
