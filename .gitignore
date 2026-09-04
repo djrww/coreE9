@@ -1,0 +1,22 @@
+target/
+
+# Rocq:自動生成與編譯產物
+rocq/theories/reconcile_gen.v
+rocq/theories/*.vo
+rocq/theories/*.vok
+rocq/theories/*.vos
+rocq/theories/.*.aux
+rocq/theories/*.glob
+
+# 本地量測/覆蓋產物(不入庫:由 gate 工具生成)
+coverage.lcov
+rocq/.lia.cache
+big_unfiltered.log
+__pycache__/
+
+# Coq lia cache(編譯副產物)
+.lia.cache
+
+# 發布產物:內含預編譯二進位(4MB×3)與 rustdoc HTML(14MB),應改以 GitHub Releases 資產交付;
+# 不作為版本庫常駐內容。
+release-v0.1.1/

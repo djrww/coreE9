@@ -1,0 +1,59 @@
+<?xml version="1.0"?>
+<!-- NaTT 交叉驗證:R1Shorten 的「過度近似超集」TRS。
+     規則 ev(I,S,K,i(X,s(E))) -> ev(I,S,K,i(X,E)) 允許任何事件在任意語境
+     (含 cons 列表內部)把右端點嚴格減一;term rewriting 自動在任意位置套用。
+     聲稱鏈:R1 一步(剪到 c >= start+1)是「減一」的有限複合,
+     故本 TRS 的終止是 R1 真系統終止的超集層證據(R2 的粗外證,
+     不依賴 cut_for 的精細性,只依賴「剪刀只讓 end 嚴格變小」)。
+     誠實限定:本檔只證終止側;臨界對與合流不在此驗。 -->
+<problem xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="trsTerminationInput">
+  <trs>
+    <rules>
+      <rule>
+        <lhs>
+          <funapp>
+            <name>ev</name>
+            <arg><var>I</var></arg>
+            <arg><var>S</var></arg>
+            <arg><var>K</var></arg>
+            <arg>
+              <funapp>
+                <name>i</name>
+                <arg><var>X</var></arg>
+                <arg>
+                  <funapp>
+                    <name>s</name>
+                    <arg><var>E</var></arg>
+                  </funapp>
+                </arg>
+              </funapp>
+            </arg>
+          </funapp>
+        </lhs>
+        <rhs>
+          <funapp>
+            <name>ev</name>
+            <arg><var>I</var></arg>
+            <arg><var>S</var></arg>
+            <arg><var>K</var></arg>
+            <arg>
+              <funapp>
+                <name>i</name>
+                <arg><var>X</var></arg>
+                <arg><var>E</var></arg>
+              </funapp>
+            </arg>
+          </funapp>
+        </rhs>
+      </rule>
+    </rules>
+    <signature>
+      <funcsym><name>ev</name><arity>4</arity></funcsym>
+      <funcsym><name>i</name><arity>2</arity></funcsym>
+      <funcsym><name>s</name><arity>1</arity></funcsym>
+      <funcsym><name>cons</name><arity>2</arity></funcsym>
+      <funcsym><name>nil</name><arity>0</arity></funcsym>
+    </signature>
+  </trs>
+  <strategy>FULL</strategy>
+</problem>

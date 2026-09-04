@@ -1,0 +1,133 @@
+name: CI
+
+# 接納契約 = 上面的九律具名矩陣 + 下方四道閘門。CI 是**唯一的**驗收管道
+# (見 docs/adr/0002-closed-contribution-model.md 與 CONTRIBUTING.md)。
+# 因此本觸發器涵蓋**所有**分支(包括 p2.1),並開放手動重跑。
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read          # 最小權限:本工作流只需讀取原始碼,不寫回。
+
+# 同一分支的舊 run 被新 push 取代(省 runner,避免「舊結果誤導」)。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  verify:
+    name: fmt → clippy → test → doc(九律矩陣即驗收合同)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain (rustfmt, clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all --check
+
+      - name: clippy (deny warnings)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test(九律具名矩陣:L1–L9 / M1 M2 M4 M5 / T2 / R₀ / 語義面 / 反例縮小)
+        run: cargo test --all
+
+      - name: rustdoc (deny warnings)
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+
+  rocq:
+    name: rocq gate(Phase 0–3:mirror + WCRUtil + Newman + RedEdges + 對帳)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rocq(Coq) + MathComp
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y coq libcoq-mathcomp-ssreflect
+
+      - name: Install stable toolchain(rocq_reconcile 需 Rust 執行期事實來源)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build theorem library(鏡像 → WCRUtil → Newman → SN → WCR → R3Guard)
+        run: make -C rocq
+
+      - name: Reconcile(Rust 實例 ↔ Rocq 鏡像,生成 reconcile_gen.v 並複驗)
+        run: make -C rocq reconcile
+
+  coverage:
+    name: coverage gate(core ≥ 90%,ast ≥ 75% 豁免)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain + llvm tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Collect coverage
+        run: cargo llvm-cov --lcov --output-path target/coverage.lcov
+
+      - name: Coverage gate
+        run: python3 tools/cov_gate.py target/coverage.lcov
+
+  bench:
+    name: benchmark gate(hotpaths best-of-n ±25% −5% 雜訊下限 + null 漂移校正)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run hotpaths benchmark
+        run: |
+          set -o pipefail
+          mkdir -p target
+          cargo bench --bench hotpaths -- --reps 11 --newman-reps 5 2>&1 | tee target/bench.log
+
+      # 先自測 gate 本身的判別力(防止「修到永遠綠」),再判真實代碼。
+      - name: Gate self-test(discriminative power)
+        run: python3 tools/bench_gate_selftest.py
+
+      - name: Benchmark gate
+        run: python3 tools/bench_gate.py target/bench.log bench/BASELINE.json --tol 0.25
+
+      # 失敗時可直接看原始統計(null 漂移、MAD),不必重跑。
+      - name: Upload raw bench log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hotpaths-bench-log
+          path: target/bench.log
+          if-no-files-found: ignore

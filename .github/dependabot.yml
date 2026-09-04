@@ -1,0 +1,40 @@
+# Dependabot —— 僅做自動化依賴維護。
+#
+# 誠實註記:本專案在 CONTRIBUTING.md / docs/adr/0002 明定「不開放 issue / PR / fork」。
+# 底下這部唯一例外:Dependabot 是**第一方自動化**,它發起的 PR 並非外部貢獻,
+# 而是依賴版本/標籤的例行維護(供應鏈安全)。外部人員仍不得自行發 PR。
+# 視需要可在 Settings → Code security 關閉本檔(或把 open-pull-requests-limit 設 0)。
+version: 2
+
+updates:
+  # Rust 依賴(crates.io),每週合併成單一 PR(減少噪音)。
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: friday
+      time: "02:00"
+      timezone: "Asia/Hong_Kong"
+    open-pull-requests-limit: 3
+    labels: ["dependencies"]
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      rust-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # GitHub Actions 的 action 標籤更新。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: friday
+      time: "02:00"
+      timezone: "Asia/Hong_Kong"
+    open-pull-requests-limit: 3
+    labels: ["ci", "dependencies"]
+    commit-message:
+      prefix: "chore(ci)"
+      include: scope

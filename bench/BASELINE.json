@@ -1,0 +1,78 @@
+{
+  "note": "hotpaths 基線(同機刷新;tools/bench_gate.py --update)。單位 ms/樣本 = n≥7 輪之中位數,mad_ms 為其 MAD。`null` 為環境參考內核(僅診斷漂移用)。換機器/換 rustc 後請重新 --update,勿用跨機基線硬比。",
+  "harness": "hotpaths-v2",
+  "kernels": {
+    "null": {
+      "median_ms_per_sample": 1.7e-05,
+      "mad_ms": 1e-06,
+      "min_ms": 1.5e-05,
+      "max_ms": 2.3e-05,
+      "reps": 9,
+      "samples_per_rep": 1000
+    },
+    "lex": {
+      "median_ms_per_sample": 0.000528,
+      "mad_ms": 3.2e-05,
+      "min_ms": 0.00048,
+      "max_ms": 0.00064,
+      "reps": 11,
+      "samples_per_rep": 1000
+    },
+    "parse": {
+      "median_ms_per_sample": 0.004422,
+      "mad_ms": 0.000295,
+      "min_ms": 0.003913,
+      "max_ms": 0.004825,
+      "reps": 11,
+      "samples_per_rep": 1000
+    },
+    "laminar": {
+      "median_ms_per_sample": 0.009407,
+      "mad_ms": 0.0003,
+      "min_ms": 0.008541,
+      "max_ms": 0.010299,
+      "reps": 11,
+      "samples_per_rep": 500
+    },
+    "named_sexp": {
+      "median_ms_per_sample": 0.009551,
+      "mad_ms": 0.000418,
+      "min_ms": 0.008862,
+      "max_ms": 0.011937,
+      "reps": 11,
+      "samples_per_rep": 500
+    },
+    "l7b_evaluate": {
+      "median_ms_per_sample": 0.007192,
+      "mad_ms": 0.000244,
+      "min_ms": 0.006947,
+      "max_ms": 0.009747,
+      "reps": 11,
+      "samples_per_rep": 200
+    },
+    "r0_lex": {
+      "median_ms_per_sample": 0.000628,
+      "mad_ms": 3.1e-05,
+      "min_ms": 0.000597,
+      "max_ms": 0.000806,
+      "reps": 11,
+      "samples_per_rep": 1000
+    },
+    "r0_parse": {
+      "median_ms_per_sample": 0.002823,
+      "mad_ms": 0.000181,
+      "min_ms": 0.002582,
+      "max_ms": 0.003175,
+      "reps": 11,
+      "samples_per_rep": 1000
+    },
+    "newman_3x4x6": {
+      "median_ms_per_sample": 6.463246,
+      "mad_ms": 0.290973,
+      "min_ms": 6.172273,
+      "max_ms": 7.631215,
+      "reps": 5,
+      "samples_per_rep": 1
+    }
+  }
+}

@@ -1,0 +1,50 @@
+[package]
+name = "cl0r0"
+version = "0.1.1"
+edition = "2021"
+description = "CL0/R0 dual carrier: surface syntax trees, nine laws (L1-L9), mechanical self-verification"
+license = "MIT"
+
+[lib]
+name = "cl0r0"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cl0r0"
+path = "src/bin/cl0r0.rs"
+
+[[bin]]
+name = "l9newman"
+path = "src/bin/l9newman.rs"
+
+[[bin]]
+name = "fuzz"
+path = "src/bin/fuzz.rs"
+
+[[bin]]
+name = "demo"
+path = "src/bin/demo.rs"
+
+[[bin]]
+name = "lsp"
+path = "src/bin/lsp.rs"
+
+[[bench]]
+name = "hotpaths"
+harness = false
+
+[profile.release]
+debug = true
+# PGO + LTO 優化(LTO 固化在 profile;PGO 由 RUSTFLAGS 驅動兩輪構建)
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+
+# 基準專用 profile:显式錨死優化層級,避免日後改 [profile.release]
+# 或 cargo 預設變動讓 bench/BASELINE.json 整套失真(需重跑 --update)。
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+incremental = false
+debug = true
