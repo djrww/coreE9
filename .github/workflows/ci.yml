@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install stable toolchain (rustfmt, clippy)
         uses: dtolnay/rust-toolchain@stable
@@ -54,15 +54,18 @@ jobs:
 
   rocq:
     name: rocq gate(Phase 0–3:mirror + WCRUtil + Newman + RedEdges + 對帳)
+    # 用官方 coqorg/coq:8.20 容器**固定** Coq/MathComp 版本 —— ubuntu-latest 的 apt
+    # 只帶很舊的 coq(≈8.16),會讓本庫的定理集編譯失敗;容器版本即本機驗證版本。
     runs-on: ubuntu-latest
+    container: coqorg/coq:8.20
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Install Rocq(Coq) + MathComp
+      - name: Ensure python3 + make(容器內為 root;belt-and-suspenders)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y coq libcoq-mathcomp-ssreflect
+          apt-get update
+          apt-get install -y --no-install-recommends python3 make
 
       - name: Install stable toolchain(rocq_reconcile 需 Rust 執行期事實來源)
         uses: dtolnay/rust-toolchain@stable
@@ -78,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install stable toolchain + llvm tools
         uses: dtolnay/rust-toolchain@stable
@@ -102,7 +105,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
