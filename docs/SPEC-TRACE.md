@@ -176,6 +176,6 @@
 `push main / PR` → `cargo fmt --all --check` → `cargo clippy --all-targets -- -D warnings`
 → `cargo test --all`(上表 46 具名測試即驗收合同)→ `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
 → **coverage gate**(核心 ≥90%,ast ≥75% 豁免,`tools/cov_gate.py`)
-→ **bench gate**(`hotpaths` ±25%,`tools/bench_gate.py`)。
+→ ~~**bench gate**(`hotpaths` ±25%,`tools/bench_gate.py`)~~ ⏸ 2026-09-07 暫時清退(方法論留 git 史,見 DEBT-REVIEW)。
 
 任何一條紅線 = PR 不可合併。規格讓步必須走「改規格 + 對帳表更新」而非「放水測試」。

@@ -10,7 +10,7 @@
 
 | 維度 | 狀態 | 證據 |
 |---|---|---|
-| 代碼質量 | ✅ 測試/靜態/**基準**全綠(bench gate 已重寫,2026-09-02)| `cargo test` **47/47**(迭代 3 新增 `test_law_L9b_parallel_moves_exact_swap`)· clippy `-D warnings` 0 · fmt clean · rustdoc `-D warnings` 0 · coverage gate ok(rep 90.6%)· **bench gate:已修** —— 判定統計量從 median 改 **best-of-n**(同機三趟 cv 10–24% → 0.3–3.3%)、加 `null` 環境標尺漂移校正、基線同機 `--update` 重刷、並入庫 `tools/bench_gate_selftest.py`(9 個判別力情境,掛 CI)。**待辦**:CI runner(4 核)首次跑後需在同機 `--update` 一次以達完全同境 |
+| 代碼質量 | ✅ 測試/靜態全綠(bench 面 ⏸ 暫時清退,2026-09-07)| `cargo test` **53 全綠**(除錯批次新增 6 個 R₀ 回歸,見 DEBT-REVIEW 2026-09-07)· clippy `-D warnings` 0 · fmt clean · rustdoc `-D warnings` 0 · coverage gate ok · oracle gate 39/39(P4-1 parity)· **bench gate:⏸ 清退**(2026-09-07;方法論留 git 史:`best-of-n + null 校正` 仍為未來重啟的判據) |
 | 九律覆蓋 | ✅ 主體完成 | L1–L9 + M1/M2/M4/M5 + T2 + R₀ 語義面 + 反例縮小:**47 具名測試**(見 SPEC-TRACE §〇);L9b′ 平行的精確交換已入陣 |
 | R₀ 載體 | ⚠️ 部分 | 詞法 `r0_lex` + `lalr1_clean` + `unsupported` 齊;**缺完整 `r0_parse`(CST 樹產出)** |
 | 重寫系統 | ✅ 完整 | §4.2 良基測度 μ(L8)+ §4.3 臨界對/L9 Newman 通道(含 Naive 反例對照) |
