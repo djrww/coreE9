@@ -830,6 +830,170 @@ pub fn parity_dir(
     Ok(out)
 }
 
+// ===========================================================================
+// P4-2:生成式差分 —— fuzz agreement(by-construction 期望 × rustc × 三軌模型)
+//
+// 參照 RustSmith 的「生成時即知合法性」:`gen::gen_r0_semantic` 的樣本不是
+// 「隨機文本問 rustc 怎麼說」,而是構造上已知期望判決。由此:
+//   * 期望 ≠ rustc 判決 = BUG 候選(生成器構造推理錯誤,或真發現);
+//   * 借用衝突碼下 Lexical 漏報 = 幾何保守下界律違反(逐樣本機械執法)。
+// 判定權不轉移:gate 軌道(nll/referent)的 over/under 只記錄、不入庫,
+// 歸因仍由 parity 註冊表單源承擔(ORACLE-TRACE §四)。
+// ===========================================================================
+
+/// 一次 fuzz agreement 失敗(律級)。
+#[derive(Clone, Debug)]
+pub struct FuzzFailure {
+    /// 違反的律(精細標記,shrink 謂詞依此選取):
+    /// `expectation-accept-rejected`(構造安全但 rustc 拒)/
+    /// `expectation-reject-accepted`(構造衝突但 rustc 收)/
+    /// `expectation-reject-wrong-code`(拒了,但碼不屬構造類)/
+    /// `lower-bound`(借用衝突碼下 Lexical 漏報)/
+    /// `out-of-scope`(樣本非純 R₀)/ `oracle-crash`(問不到判決)。
+    pub law: String,
+    /// 失敗樣本源碼。
+    pub src: String,
+    /// 說明。
+    pub detail: String,
+}
+
+/// fuzz agreement 匯總(實測統計;ORACLE-TRACE 的 P4-2 段引用)。
+#[derive(Clone, Debug)]
+pub struct FuzzReport {
+    /// 輪數。
+    pub rounds: usize,
+    /// 種子(可重現)。
+    pub seed: u64,
+    /// rustc 版本見證。
+    pub rustc_version: String,
+    /// by-construction 期望的分布。
+    pub n_accept_expect: usize,
+    /// 期望 = 借用衝突拒絕的樣本數。
+    pub n_reject_borrow_expect: usize,
+    /// 期望 = 移動拒絕的樣本數。
+    pub n_reject_move_expect: usize,
+    /// gate 軌道過報(MODEL-DIFF 候選;非失敗):`(nll, referent)`。
+    pub gate_over: (usize, usize),
+    /// gate 軌道漏報(同上):`(nll, referent)`。
+    pub gate_under: (usize, usize),
+    /// 律級失敗清單(空 = agreement 成立)。
+    pub failures: Vec<FuzzFailure>,
+}
+
+/// 跑 N 輪生成式差分 agreement(外律 O-7 的引擎;bin/fuzz 併軌同用)。
+pub fn fuzz_agreement(oracle: &dyn crate::oracle::Oracle, rounds: u64, seed: u64) -> FuzzReport {
+    use crate::gen::{gen_r0_semantic, R0Expect, Rng};
+    let mut rng = Rng::new(seed);
+    let mut rep = FuzzReport {
+        rounds: rounds as usize,
+        seed,
+        rustc_version: String::new(),
+        n_accept_expect: 0,
+        n_reject_borrow_expect: 0,
+        n_reject_move_expect: 0,
+        gate_over: (0, 0),
+        gate_under: (0, 0),
+        failures: Vec::new(),
+    };
+    for _ in 0..rounds {
+        let s = gen_r0_semantic(&mut rng);
+        match s.expect {
+            R0Expect::Accept => rep.n_accept_expect += 1,
+            R0Expect::RejectBorrow => rep.n_reject_borrow_expect += 1,
+            R0Expect::RejectMove => rep.n_reject_move_expect += 1,
+        }
+        let orep = match oracle.check(&s.src) {
+            Ok(r) => r,
+            Err(e) => {
+                rep.failures.push(FuzzFailure {
+                    law: "oracle-crash".to_string(),
+                    src: s.src.clone(),
+                    detail: e.to_string(),
+                });
+                continue;
+            }
+        };
+        rep.rustc_version = orep.rustc_version.clone();
+        let m = model_check(&s.src);
+        if !m.in_scope {
+            rep.failures.push(FuzzFailure {
+                law: "out-of-scope".to_string(),
+                src: s.src.clone(),
+                detail: format!("model 判範圍外:{:?}", m.scope_note),
+            });
+            continue;
+        }
+        let accept = orep.verdict.is_accept();
+        let codes = orep.verdict.codes();
+        let borrow_conflict = codes
+            .iter()
+            .any(|c| BORROW_CONFLICT_CODES.contains(&c.as_str()));
+        // 律 1:by-construction 期望 × rustc 判決
+        let ok1 = match s.expect {
+            R0Expect::Accept => accept,
+            R0Expect::RejectBorrow => !accept && borrow_conflict,
+            R0Expect::RejectMove => !accept,
+        };
+        if !ok1 {
+            let law = if s.expect == R0Expect::Accept {
+                "expectation-accept-rejected"
+            } else if accept {
+                "expectation-reject-accepted"
+            } else {
+                "expectation-reject-wrong-code"
+            };
+            rep.failures.push(FuzzFailure {
+                law: law.to_string(),
+                src: s.src.clone(),
+                detail: format!(
+                    "expect={:?} rustc_accept={accept} codes={codes:?}",
+                    s.expect
+                ),
+            });
+        }
+        // 律 2:幾何保守下界(逐樣本):借用衝突碼 ⇒ Lexical 必拒
+        if !accept && borrow_conflict {
+            let lx = m
+                .tracks
+                .iter()
+                .find(|t| t.track == "lexical")
+                .expect("lexical 軌");
+            if !lx.reject {
+                rep.failures.push(FuzzFailure {
+                    law: "lower-bound".to_string(),
+                    src: s.src.clone(),
+                    detail: format!("rustc {codes:?} 而 Lexical 軌接受"),
+                });
+            }
+        }
+        // 統計:gate 軌道分歧(MODEL-DIFF 候選,非失敗)
+        for label in ["nll", "referent"] {
+            let tv = m
+                .tracks
+                .iter()
+                .find(|t| t.track == label)
+                .expect("軌道缺失");
+            let is_nll = label == "nll";
+            if tv.reject == accept {
+                if tv.reject {
+                    if is_nll {
+                        rep.gate_over.0 += 1;
+                    } else {
+                        rep.gate_over.1 += 1;
+                    }
+                } else {
+                    if is_nll {
+                        rep.gate_under.0 += 1;
+                    } else {
+                        rep.gate_under.1 += 1;
+                    }
+                }
+            }
+        }
+    }
+    rep
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

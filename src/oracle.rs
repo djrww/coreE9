@@ -183,6 +183,23 @@ impl CliOracle {
         &self.rustc
     }
 
+    /// 版本見證(按 rustc 路徑快取):P4-2 併軌 fuzz 每樣本一查,
+    /// `--version` 子進程每工具鏈只跑一次(判決決定論不受影響 ——
+    /// 同輸入同版本兩趟全等律 O-4 仍逐案例實測)。
+    pub fn cached_version(&self) -> Result<String, OracleError> {
+        use std::sync::Mutex;
+        static CACHE: Mutex<Option<(String, String)>> = Mutex::new(None);
+        let mut g = CACHE.lock().unwrap();
+        match g.as_ref() {
+            Some((p, v)) if p == &self.rustc => Ok(v.clone()),
+            _ => {
+                let v = self.toolchain_version()?;
+                *g = Some((self.rustc.clone(), v.clone()));
+                Ok(v)
+            }
+        }
+    }
+
     /// `rustc --version`(單行;基線的版本見證)。
     pub fn toolchain_version(&self) -> Result<String, OracleError> {
         let out = Command::new(&self.rustc)
@@ -246,7 +263,7 @@ impl Oracle for CliOracle {
     }
 
     fn check(&self, src: &str) -> Result<OracleReport, OracleError> {
-        let rustc_version = self.toolchain_version()?;
+        let rustc_version = self.cached_version()?;
         let (code, diagnostics, other_out) = self.run_rustc(src)?;
         let mut errors = Vec::new();
         for line in diagnostics.lines() {

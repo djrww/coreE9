@@ -14,7 +14,7 @@
 |---|---|---|
 | `src/oracle.rs`(feature = "oracle") | `trait Oracle` + `CliOracle`(Tier-A)+ `Verdict`/`RustcError`/`Expectation` + 自帶 mini JSON 解析器(零新依賴) | ✅ |
 | `src/model.rs`(feature = "oracle") | **受驗對象**:`extract_r0`(R₀ 樹 → `ast::Facts`)+ `model_check`(三軌紅邊判決)+ `parity_dir`/`parity_violations`(對帳引擎)+ 註冊表解析 | ✅ |
-| `tests/oracle_laws.rs` | 外律 O 系 ×6(見 SPEC-TRACE 〇′′),含 P4-1 主律 `oracle_parity_borrow_matrix` | ✅ 6/6 |
+| `tests/oracle_laws.rs` | 外律 O 系 ×7(見 SPEC-TRACE 〇′′),含 P4-1 主律 `oracle_parity_borrow_matrix` + P4-2 主律 `oracle_fuzz_agreement` | ✅ 7/7 |
 | `corpus/curated/`(39 案例)+ `corpus/BASELINE.json` | 種子 8 → **39 案例**(24 accept / 14 reject / 1 uncoded;模板系統化生成,碼由 rustc bootstrap 實測命名);基線 39/39 | ✅ |
 | `corpus/PARITY-REGISTRY.json` | 24 項已歸檔分歧,7 個家族,每項強制附出處 | ✅ 24/24 命中,無 stale |
 | `tools/oracle_gate.py`(含 `--parity`) | 兩趟全等 + BUG=0 + 基線對帳 + parity(判定單一源於 Rust 側,腳本只中繼) | ✅ |
@@ -183,10 +183,38 @@ CL0 行為不變(事件真空);R₀ 模型即時受惠(parity 由 29 項分歧�
 
 ---
 
-## 七、下一步(P4-2 起,見 PIVOT-RUSTC-ORACLE §八)
+## 七、P4-2 生成式差分(已交付 2026-09-07)
 
-- **P4-2**:`gen.rs` 語義感知升級(生成時即知期望判決);fuzz 併軌雙跑;
-  反例 shrink 入 `tests/fixtures/`;
+> 機制:樣本**不是**隨機文本問 rustc 怎麼說,而是 `gen::gen_r0_semantic`
+> by-construction 生成——借用紀律由生成器內部的活躍借用簿記把關
+> (寫只在目標無活躍 let 借用時發出;&mut let 借用從不同時活躍;
+> call-arg 借用死於呼叫返回;while 條件借用以迴圈出口為最後使用),
+> 衝突模式被明確注入(5 種借用衝突形狀 + 1 種 use-after-move)。
+> 期望判決於生成時已知,由此「期望 ≠ rustc 判決」= BUG 候選。
+
+**實測(rustc 1.98.1,2026-09-07,本沙箱;重現:`cargo test --features oracle
+--test oracle_laws oracle_fuzz_agreement`,或 `cargo run --features oracle
+--release --bin fuzz`)**:
+
+| 指標 | 數值 |
+|---|---|
+| 具名測試(250 輪,seed 0x0F4220260002) | 0 失配,0 範圍外 |
+| fuzz 併軌(2000 輪,seed 0x0F4220260003,release) | 0 失配,0 範圍外 |
+| by-construction 分布(2000) | accept 812 / 借用衝突 988 / 移動 200 |
+| 借用衝突碼實見 | E0502(絕大多數)/ E0503 / E0506 —— 全落 BORROW_CONFLICT_CODES |
+| 移動類實見 | E0382 |
+| gate 軌道 over/under(2000;MODEL-DIFF 候選,非失敗) | nll 476/593;referent 402/410 |
+
+**紀律**:① 判定權不轉移——gate 軌道分歧只記錄、歸因仍由 parity 註冊表單源
+承擔;② 版本見證:`CliOracle::cached_version`(按工具鏈快取 `--version`,
+fuzz 每樣本不再多一個子進程;O-4 兩趟全等律不變);③ 失敗縮小:O-7 測試
+失敗時 ddmin 縮到最小反例 → 歸檔 `tests/fixtures/oracle_fuzz_<law>.txt`
+(P0 #3 防線沿用);④ 探針史:交付前以 3000 輪獨立探針實測 0 失配(探針已清退,
+正式載體 = O-7 + fuzz 併軌)。
+
+## 八、下一步(P4-3 起,見 PIVOT-RUSTC-ORACLE §八)
+
 - **P4-3**:S1 place 敏感 + 型別面(Copy/移動)→ 消滅 F-B/F-C/F-F;
   S2 CFG killer → 消滅 F-E;F-A 隨軌道分工重設計收斂;每消滅一個家族,
   註冊表對應條目必須轉 stale(這是「修好了」的機器定義)。
+  §七的 gate 軌道 over/under 統計將作為 P4-3 的「前」值對照。

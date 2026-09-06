@@ -361,6 +361,42 @@ fn main() {
         }
     }
 
+    // ---------- O 系:生成式差分 agreement(P4-2;併軌雙跑)----------
+    // 每輪樣本 = by-construction 期望 × rustc 實判 × 模型三軌;
+    // 律級失配(期望失配 / 下界漏報 / 範圍外)計 LAW FAIL,
+    // gate 軌道 over/under 只入統計(MODEL-DIFF 候選,歸因在 parity 註冊表)。
+    #[cfg(feature = "oracle")]
+    {
+        let rounds: u64 = std::env::var("CL0R0_ORACLE_FUZZ_ROUNDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2000);
+        let o = cl0r0::oracle::CliOracle::new();
+        match o.cached_version() {
+            Ok(_v) => {
+                let rep = cl0r0::model::fuzz_agreement(&o, rounds, 0x0F42_2026_0003);
+                let nfail = rep.failures.len();
+                stats.push(("O-fuzz".to_string(), rounds as usize, nfail));
+                if nfail > 0 {
+                    for f in rep.failures.iter().take(3) {
+                        eprintln!("LAW FAIL [O-fuzz] {} {}", f.law, f.detail);
+                        eprintln!("    源碼:\n{}", f.src);
+                        if let Ok(dir) = std::env::var("CL0R0_FIXTURES_DIR") {
+                            let _ = std::fs::create_dir_all(&dir);
+                            let p = format!("{dir}/oracle_fuzz_{}.txt", f.law);
+                            let _ = std::fs::write(&p, &f.src);
+                            eprintln!("    ↳ 已歸檔 {p}");
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                stats.push(("O-fuzz".to_string(), 1, 1));
+                eprintln!("LAW FAIL [O-fuzz] oracle 環境:{e}");
+            }
+        }
+    }
+
     // ---------- 輸出 ----------
     let mut total_fail = 0usize;
     println!("╔══════════════════════════════════════════════════════════╗");

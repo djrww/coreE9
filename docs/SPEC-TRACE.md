@@ -84,7 +84,7 @@
 `shrink_finds_exact_minimal` · `shrink_handles_unicode_boundaries` ·
 `shrink_monotone_l7_style` · `shrink_empty_and_trivial`
 
-**外律 O 系(oracle 腳手架自證,5,** `tests/oracle_laws.rs`,feature = "oracle" **;P4-0,2026-09-06)**
+**外律 O 系(oracle 通道自證 + 生成式差分,7,** `tests/oracle_laws.rs`,feature = "oracle" **;P4-0,2026-09-06;P4-2,2026-09-07)**
 
 | 具名測試 | 對應律(oracle 外延) |
 |---|---|
@@ -94,6 +94,7 @@
 | `oracle_determinism` | L2 決定論(兩趟判決全等) |
 | `oracle_expectation_grammar` | 語料約定本身(檔名 → 期望) |
 | `oracle_parity_borrow_matrix` | **P4-1 主律**:rustc × 三軌 parity(39 案例);分歧 = 註冊表精確相等(24/24,BUG 候選 0,stale 0);**幾何保守下界定律**(rustc 借用衝突類碼 ⇒ Lexical 必拒,9/9);blanket(範圍外家族 under 霈屬已申報集合) |
+| `oracle_fuzz_agreement` | **P4-2 主律**:生成式差分 agreement(N 輪 by-construction 樣本 × rustc 判決 × 三軌;期望失配 0、逐樣本下界律、全樣本 in-scope);失敗 ddmin 縮小入 `tests/fixtures/` |
 
 > O 系測的是 **oracle 通道與 parity 引擎本身**;「本模型 vs rustc」的分歧歸檔
 > 見 `docs/ORACLE-TRACE.md` §三 + `corpus/PARITY-REGISTRY.json`(24 項 / 7 家族)。

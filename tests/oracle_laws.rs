@@ -223,3 +223,92 @@ fn oracle_parity_borrow_matrix() {
         }
     }
 }
+
+/// O-7(P4-2 主律):生成式差分 agreement。
+/// N 輪 by-construction 樣本(`gen::gen_r0_semantic`)× rustc 判決 × 模型三軌:
+///   ① 生成器期望 × rustc 判決 0 失配(生成時即知判決的構造正確性);
+///   ② 逐樣本幾何保守下界:rustc 以借用衝突類碼拒絕 ⇒ Lexical 軌必拒;
+///   ③ 全部樣本 in-scope(純 R₀,受驗對象在模型域內)。
+/// 失敗時:ddmin 縮到最小反例 → 歸檔 `tests/fixtures/`(P0 #3 防線沿用)。
+#[test]
+fn oracle_fuzz_agreement() {
+    use cl0r0::model::{fuzz_agreement, model_check};
+    use cl0r0::shrink::shrink_to_minimal;
+    let rounds: u64 = std::env::var("CL0R0_ORACLE_FUZZ_ROUNDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(250);
+    let o = CliOracle::new();
+    let rep = fuzz_agreement(&o, rounds, 0x0F42_2026_0002);
+    assert_eq!(
+        rep.rustc_version,
+        o.cached_version().expect("版本見證"),
+        "版本見證不一致"
+    );
+    if !rep.failures.is_empty() {
+        let f = &rep.failures[0];
+        // shrink 保持謂詞(依律選取):s 仍使該律失敗。
+        let prop: Box<dyn Fn(&str) -> bool> =
+            match f.law.as_str() {
+                "expectation-accept-rejected" => {
+                    Box::new(|s| !o.check(s).map(|r| r.verdict.is_accept()).unwrap_or(true))
+                }
+                "expectation-reject-accepted" => {
+                    Box::new(|s| o.check(s).map(|r| r.verdict.is_accept()).unwrap_or(false))
+                }
+                "expectation-reject-wrong-code" => Box::new(|s| {
+                    o.check(s)
+                        .map(|r| {
+                            !r.verdict.is_accept()
+                                && !r.verdict.codes().iter().any(|c| {
+                                    cl0r0::model::BORROW_CONFLICT_CODES.contains(&c.as_str())
+                                })
+                        })
+                        .unwrap_or(false)
+                }),
+                "lower-bound" => Box::new(|s| {
+                    let m = model_check(s);
+                    m.in_scope
+                        && o.check(s)
+                            .map(|r| {
+                                !r.verdict.is_accept()
+                                    && r.verdict.codes().iter().any(|c| {
+                                        cl0r0::model::BORROW_CONFLICT_CODES.contains(&c.as_str())
+                                    })
+                                    && !m
+                                        .tracks
+                                        .iter()
+                                        .find(|t| t.track == "lexical")
+                                        .expect("lexical 軌")
+                                        .reject
+                            })
+                            .unwrap_or(false)
+                }),
+                _ => Box::new(|s| !model_check(s).in_scope),
+            };
+        let m = shrink_to_minimal(&f.src, &prop);
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+        let _ = std::fs::create_dir_all(dir);
+        let path = format!("{dir}/oracle_fuzz_{}.txt", f.law);
+        let _ = std::fs::write(&path, &m);
+        eprintln!("O-7 失敗[{}]:最小反例已歸檔 {path}:\n{m}", f.law);
+    }
+    assert!(
+        rep.failures.is_empty(),
+        "fuzz agreement 失敗 {} 例(首三:{:#?})",
+        rep.failures.len(),
+        rep.failures.iter().take(3).collect::<Vec<_>>()
+    );
+    // 樣本宇宙不退化(構造紀律的分布見證)。
+    let third = (rounds / 3) as usize;
+    assert!(
+        rep.n_accept_expect >= third,
+        "accept 樣本應 ≥1/3(實得 {})",
+        rep.n_accept_expect
+    );
+    assert!(
+        rep.n_reject_borrow_expect + rep.n_reject_move_expect >= third,
+        "衝突樣本應 ≥1/3(實得 {})",
+        rep.n_reject_borrow_expect + rep.n_reject_move_expect
+    );
+}

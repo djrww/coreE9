@@ -85,6 +85,10 @@
 第六迭代b ✅(2026-09-06):P4-1a CL0 事件真空修復 → ast.rs 同構修復
                   (decl_site + 遍行期作用域 + 借用事件/借鏈 span)+ 兩具名測試
                   補反真空斷言(實測校準);47/47 綠,T2 首食真數據,parity 不變
+第七迭代 ✅(2026-09-07):P4-2 生成式差分 → `gen::gen_r0_semantic`(by-construction
+                  期望判決,參照 RustSmith 合法性-by-construction)+ `fuzz` 併軌
+                  雙跑 + 外律 O-7 `oracle_fuzz_agreement`;2000 輪 0 失配/0 範圍外
+                  (rustc 1.98.1;統計見 ORACLE-TRACE §七)
 按需            :P2 #9 #10                → 增量編輯器 demo / LSP,對外可用
 ```
 
