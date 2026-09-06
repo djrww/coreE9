@@ -1265,80 +1265,18 @@ impl Tree {
     /// §1.2 連續性公理:內部節點 σ(v) = [σ(c₁).start, σ(c_k).end),
     /// 且子節點依序不交:∀i: σ(cᵢ).end ≤ σ(cᵢ₊₁).start。
     pub fn validate_continuity(&self) -> Result<(), String> {
-        for (id, node) in self.nodes.iter().enumerate() {
-            if node.children.is_empty() {
-                continue;
-            }
-            // 葉子節點必須是 token(無子節點)或檢查缺失:這裡只檢查內部節點。
-            let first = self.nodes[node.children[0] as usize].span;
-            let last = self.nodes[*node.children.last().unwrap() as usize].span;
-            if node.span != Span::new(first.start, last.end) {
-                return Err(format!(
-                    "node {} ({:?}) span {} != children union [{}, {})",
-                    id, node.kind, node.span, first.start, last.end
-                ));
-            }
-            let mut prev_end = first.start;
-            for &c in &node.children {
-                let cs = self.nodes[c as usize].span;
-                if cs.start < prev_end {
-                    return Err(format!(
-                        "node {} ({:?}) children overlap: child {} span {} before prev_end {}",
-                        id, node.kind, c, cs, prev_end
-                    ));
-                }
-                prev_end = cs.end;
-            }
-        }
-        // 根節點覆蓋全源碼(虛擬節點:span 由構造器定義,這裡只驗證一致性)。
-        Ok(())
+        crate::tree::check_continuity(self)
     }
 
     /// 每個節點至多一父(樹公理:E ⊆ V×V 連通、無環、每節點至多一父)。
     pub fn validate_tree_shapes(&self) -> Result<(), String> {
-        let mut parent_of = vec![u32::MAX; self.nodes.len()];
-        for (id, node) in self.nodes.iter().enumerate() {
-            for &c in &node.children {
-                if parent_of[c as usize] != u32::MAX {
-                    return Err(format!("node {} has two parents", c));
-                }
-                parent_of[c as usize] = id as u32;
-            }
-        }
-        // 連通性:從根出發 DFS 必須訪問全部節點。
-        let mut seen = vec![false; self.nodes.len()];
-        let mut stack = vec![0u32];
-        while let Some(id) = stack.pop() {
-            if seen[id as usize] {
-                continue;
-            }
-            seen[id as usize] = true;
-            for &c in &self.nodes[id as usize].children {
-                stack.push(c);
-            }
-        }
-        for (id, s) in seen.iter().enumerate() {
-            if !s {
-                return Err(format!("node {} unreachable from root", id));
-            }
-        }
-        Ok(())
+        crate::tree::check_tree_axioms(self)
     }
 
     /// L5 檢查:任意兩節點 span 要嘛嵌套、要嘛不交(laminar 族)。
     /// 這是§3.1 嵌套定理的機械形式。
     pub fn laminar_ok(&self) -> bool {
-        let n = self.nodes.len();
-        for i in 0..n {
-            let a = self.nodes[i].span;
-            for j in (i + 1)..n {
-                let b = self.nodes[j].span;
-                if a.overlaps(&b) && !a.contains(&b) && !b.contains(&a) {
-                    return false;
-                }
-            }
-        }
-        true
+        crate::tree::check_laminar(self)
     }
 
     /// L7a:樹中是否有 ERROR 節點。
@@ -1376,19 +1314,7 @@ impl Tree {
 
     /// 無損回環:L1 的機械檢查 —— unparse(parse(s)) ≡ s 逐字節。
     pub fn unparse(&self) -> String {
-        let mut out = String::with_capacity(self.src.len());
-        let mut stack = vec![self.root()];
-        while let Some(id) = stack.pop() {
-            let node = &self.nodes[id as usize];
-            if node.children.is_empty() {
-                out.push_str(&self.src[node.span.start as usize..node.span.end as usize]);
-            } else {
-                for &c in node.children.iter().rev() {
-                    stack.push(c);
-                }
-            }
-        }
-        out
+        crate::tree::unparse_all(self, &self.src)
     }
 
     /// 具名投影 §1.3:只保留具名節點序列化的形式(供 L6 對賬)。
@@ -1396,7 +1322,7 @@ impl Tree {
     /// 祖先序保持(樹同態)。
     pub fn named_sexp(&self) -> String {
         let mut out = String::new();
-        pub fn go(t: &Tree, id: u32, out: &mut String) {
+        fn go(t: &Tree, id: u32, out: &mut String) {
             let n = &t.nodes[id as usize];
             if !n.kind.is_named() {
                 return;
@@ -1416,7 +1342,7 @@ impl Tree {
     /// 全序列化(含匿名與 trivia 文本):L2 決定論與 L3/L4 等價性的載體。
     pub fn sexp(&self) -> String {
         let mut out = String::new();
-        pub fn go(t: &Tree, id: u32, out: &mut String) {
+        fn go(t: &Tree, id: u32, out: &mut String) {
             let n = &t.nodes[id as usize];
             out.push('(');
             out.push_str(n.kind.label());

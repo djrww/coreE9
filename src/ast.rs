@@ -167,7 +167,9 @@ pub fn extract(t: &Tree) -> Facts {
 /// (ORACLE-TRACE §一 發現 #1)。
 type DeclSite = std::collections::HashMap<u32, usize>;
 
-fn lookup<'a>(scopes: &'a [Vec<usize>], facts: &'a Facts, name: &str) -> Option<usize> {
+/// 由內到外、由後到先查綁定(遮蔽語義)。雙載體共用
+/// (CL0 `ast` 與 R₀ `model` 的作用域棧同一查找契約)。
+pub fn lookup_binding<'a>(scopes: &'a [Vec<usize>], facts: &'a Facts, name: &str) -> Option<usize> {
     for scope in scopes.iter().rev() {
         for &b in scope.iter().rev() {
             if facts.bindings[b].name == name {
@@ -331,7 +333,7 @@ struct EventCollector<'a> {
 
 impl<'a> EventCollector<'a> {
     fn emit(&mut self, name: &str, span: Span, kind: EvKind) -> bool {
-        if let Some(b) = lookup(self.scopes, self.facts, name) {
+        if let Some(b) = lookup_binding(self.scopes, self.facts, name) {
             self.facts.events.push(Event {
                 binding: b,
                 kind,
@@ -525,7 +527,7 @@ impl<'a> EventCollector<'a> {
             if let Some((src, borrow_kind, src_span)) = self.walk_expr_for_borrow(en) {
                 // 借用事件落在源綁定上;借鏈錨定同一 span(Referent 軌配對)
                 self.emit(&src, src_span, borrow_kind);
-                if let Some(sb) = lookup(self.scopes, self.facts, &src) {
+                if let Some(sb) = lookup_binding(self.scopes, self.facts, &src) {
                     self.facts.links.push(BorrowLink {
                         ref_binding: b,
                         src_binding: sb,
@@ -597,12 +599,13 @@ impl Interval {
     }
 }
 
-/// 每個綁定在給定軌道下的活躍區間集合。
+/// 每個綁定在給定軌道下的活躍區間集合(索引與 `facts.events` 同序:
+/// 每事件恰一區間;事件表直接取 `facts.events`,不再克隆)。
 /// Nll 軌:killer = Span 更大的 Decl 與 Move(值被覆蓋 / 移動)。
-pub fn intervals(facts: &Facts, track: Track) -> (Vec<Vec<Interval>>, Vec<Event>) {
+pub fn intervals(facts: &Facts, track: Track) -> Vec<Vec<Interval>> {
     let n = facts.bindings.len();
     let mut out: Vec<Vec<Interval>> = vec![Vec::new(); n];
-    for (i, ev) in facts.events.iter().enumerate() {
+    for ev in facts.events.iter() {
         let b = ev.binding;
         let mut it = Interval {
             start: ev.span.start,
@@ -654,9 +657,8 @@ pub fn intervals(facts: &Facts, track: Track) -> (Vec<Vec<Interval>>, Vec<Event>
             }
         }
         out[b].push(it);
-        let _ = i;
     }
-    (out, facts.events.clone())
+    out
 }
 
 /// 紅邊集合(§3.3 衝突圖的邊):同一綁定、區間相交、相容性被違反。
@@ -675,7 +677,8 @@ pub struct RedEdge {
 
 /// 計算給定軌道下的紅邊集合(衝突圖;空圖 ⇒ 幾何收斂 §3.5)。
 pub fn red_edges(facts: &Facts, track: Track) -> Vec<RedEdge> {
-    let (ivs, events) = intervals(facts, track);
+    let ivs = intervals(facts, track);
+    let events = &facts.events;
     let mut out = Vec::new();
     for (b, _) in facts.bindings.iter().enumerate() {
         let mut evs: Vec<usize> = (0..events.len())

@@ -66,17 +66,6 @@ fn first_ident_child(t: &R0Tree, id: u32) -> Option<u32> {
         .find(|&c| t.node(c).kind == R0Kind::Ident)
 }
 
-fn lookup<'a>(scopes: &'a [Vec<usize>], facts: &'a Facts, name: &str) -> Option<usize> {
-    for scope in scopes.iter().rev() {
-        for &b in scope.iter().rev() {
-            if facts.bindings[b].name == name {
-                return Some(b);
-            }
-        }
-    }
-    None
-}
-
 /// 遞歸收集聲明:FnItem / Block / 控制流子塊 / let 初始化與語句中的塊表達式。
 fn collect_decls(
     t: &R0Tree,
@@ -213,7 +202,7 @@ struct EventCollector<'a> {
 
 impl<'a> EventCollector<'a> {
     fn emit(&mut self, name: &str, span: Span, kind: EvKind) {
-        if let Some(b) = lookup(self.scopes, self.facts, name) {
+        if let Some(b) = crate::ast::lookup_binding(self.scopes, self.facts, name) {
             self.facts.events.push(crate::ast::Event {
                 binding: b,
                 kind,
@@ -331,7 +320,7 @@ impl<'a> EventCollector<'a> {
             if let Some((src, kind, src_span)) = expr_borrow_shape(self.t, init) {
                 // 借鏈:`let r = &x;` —— Referent 軌的活性錨點
                 self.emit(&src, src_span, kind);
-                if let Some(sb) = lookup(self.scopes, self.facts, &src) {
+                if let Some(sb) = crate::ast::lookup_binding(self.scopes, self.facts, &src) {
                     self.facts.links.push(BorrowLink {
                         ref_binding: b,
                         src_binding: sb,
@@ -937,11 +926,6 @@ mod tests {
             .collect();
         assert_eq!(xs.len(), 2);
         assert_ne!(f.bindings[xs[0]].scope, f.bindings[xs[1]].scope);
-        let y_ev = f
-            .events
-            .iter()
-            .find(|e| f.bindings[e.binding].name == "y" && e.kind == EvKind::Read)
-            .or_else(|| f.events.iter().find(|e| f.bindings[e.binding].name == "y"));
         // y 的宣告 + 讀取 x(內層)
         let read_inner = f
             .events
@@ -953,6 +937,5 @@ mod tests {
             .any(|e| e.binding == xs[0] && e.kind == EvKind::Read);
         assert!(read_inner, "內層 x 應被讀取");
         assert!(read_outer, "外層 x 應被讀取");
-        let _ = y_ev;
     }
 }

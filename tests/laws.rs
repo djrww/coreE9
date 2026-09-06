@@ -907,7 +907,7 @@ fn test_law_semantic_facts_consistent() {
             assert!(!ev.kind.label().is_empty());
         }
         for track in [Track::Lexical, Track::Nll, Track::Referent] {
-            let (ivs, evs) = intervals(&facts, track);
+            let ivs = intervals(&facts, track);
             assert_eq!(ivs.len(), facts.bindings.len(), "one vec per binding");
             let mut total = 0usize;
             for (b, iv) in ivs.iter().enumerate() {
@@ -926,7 +926,12 @@ fn test_law_semantic_facts_consistent() {
                     );
                 }
             }
-            assert_eq!(total, evs.len(), "one interval per event ({:?})", track);
+            assert_eq!(
+                total,
+                facts.events.len(),
+                "one interval per event ({:?})",
+                track
+            );
             // 紅邊:同綁定 + 相容性被違反 + 區間重疊(獨立複驗)
             let edges = red_edges(&facts, track);
             let (v, e) = conflict_graph_shape(&facts, track);
@@ -1438,10 +1443,10 @@ fn test_law_semantic_extract_breadth() {
             .filter(|e| matches!(e.kind, cl0r0::ast::EvKind::Move))
             .count();
         for track in [Track::Lexical, Track::Nll, Track::Referent] {
-            let (ivs, evs) = intervals(&facts, track);
+            let ivs = intervals(&facts, track);
             assert_eq!(ivs.len(), facts.bindings.len());
             let tot: usize = ivs.iter().map(|v| v.len()).sum();
-            assert_eq!(tot, evs.len(), "{:?} on {:?}", track, src);
+            assert_eq!(tot, facts.events.len(), "{:?} on {:?}", track, src);
             let _ = red_edges(&facts, track);
         }
         n += 1;

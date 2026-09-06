@@ -351,15 +351,11 @@ pub fn normalize(mut s: AState, menu: Menu, policy: Policy) -> (AState, usize) {
 /// L8:隨機/窮舉檢查 —— 菜單每步必須嚴格遞減 μ。
 /// 返回違反 L8 的第一個反例(若有)。
 pub fn l8_check(s: &AState, menu: Menu, policy: Policy) -> Option<(AState, AState, Rule)> {
+    // Guarded:applicable 已過濾,此處獨立複驗(雙保險);Raw:非嚴格遞減即違反。
+    // 兩政策同一判據 —— 此前的 if/else-if 兩臂是完全相同的死重複。
     for r in menu.applicable(s, policy) {
         if let Some(s2) = apply(s, r) {
-            if policy == Policy::Guarded {
-                // Guarded 由 applicable 保證;這裡獨立複驗。
-                if !AState::strictly_decreases(s2.measure(), s.measure()) {
-                    return Some((s.clone(), s2, r));
-                }
-            } else if !AState::strictly_decreases(s2.measure(), s.measure()) {
-                // Raw:非嚴格遞減即違反
+            if !AState::strictly_decreases(s2.measure(), s.measure()) {
                 return Some((s.clone(), s2, r));
             }
         }

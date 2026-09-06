@@ -3,9 +3,8 @@
 //! 運行:`cargo run --bin cl0r0`(全綠輸出 0 個失敗即為機械自証通過)。
 
 use cl0r0::ast::{self, Track};
-use cl0r0::parse::{parse, Kind};
-use cl0r0::rep::{self, AState, Ev, Menu, Policy, Rule, K};
-use cl0r0::span::Span;
+use cl0r0::parse::parse;
+use cl0r0::rep::{self, AState, Ev, Menu, Policy, K};
 
 fn main() {
     println!("======================================================================");
@@ -106,7 +105,7 @@ fn main() {
             );
         }
         // T2:區間圖 = 弦圖 = 完美圖(χ = ω,§3.3)
-        let (iv, _) = ast::intervals(&facts, track);
+        let iv = ast::intervals(&facts, track);
         let all: Vec<ast::Interval> = iv.iter().flatten().copied().collect();
         let omega = ast::max_clique(&all);
         let chi = ast::greedy_chromatic(&all);
@@ -121,9 +120,9 @@ fn main() {
     // ---------- 幾何演示:把紅邊清零的「修剪」計劃 ----------
     println!("\n[修法菜單 §4] 以 referent 軌的紅邊為對象,運行規範修剪菜單");
     // 把事實層投影為 AState:每個事件一區間(取 referent 軌;無 referent 用 nll)
-    let (ivs, events) = ast::intervals(&facts, Track::Referent);
+    let ivs = ast::intervals(&facts, Track::Referent);
     let mut evs: Vec<Ev> = Vec::new();
-    for (i, ev) in events.iter().enumerate() {
+    for (i, ev) in facts.events.iter().enumerate() {
         let kind = match ev.kind {
             ast::EvKind::BorrowMut => K::Mut,
             ast::EvKind::Move | ast::EvKind::Deref => K::Mut,
@@ -212,14 +211,9 @@ fn main() {
     );
 
     println!("\n======================================================================");
-    println!(" 總計:九律矩陣的機械檢查結果見 `tests/laws.rs` 與 `cargo run --bin l9newman`");
+    println!(" 總計:三軌紅邊共 {} 條(事實層 → 幾何收斂的輸入)", total_red);
+    println!(" 九律矩陣的機械檢查結果見 `tests/laws.rs` 與 `cargo run --bin l9newman`");
     println!("======================================================================");
-    let _ = (
-        total_red,
-        Rule::R1Shorten(0, 1),
-        Kind::Root,
-        Span::new(0, 0),
-    );
 }
 
 fn ok(b: bool) -> &'static str {

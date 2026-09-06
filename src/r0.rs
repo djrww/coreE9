@@ -252,7 +252,14 @@ pub fn r0_lex(src: &str) -> Vec<R0Token> {
                 if i < b.len() && b[i] == b'&' {
                     i += 1;
                     push(&mut toks, R0TokKind::AndAnd, s, i);
-                } else if i + 3 < b.len() && &src[i..i + 3] == "mut" {
+                } else if i + 3 <= b.len()
+                    && &src[i..i + 3] == "mut"
+                    // `mut` 必須是完整詞(與 rustc 分詞一致:`&mutx` = `&` + `mutx`)。
+                    && !matches!(
+                        b.get(i + 3),
+                        Some(c) if c.is_ascii_alphanumeric() || *c == b'_'
+                    )
+                {
                     i += 3;
                     push(&mut toks, R0TokKind::AmpMut, s, i);
                 } else {
@@ -400,93 +407,49 @@ pub fn r0_lexical_invariants(src: &str) -> Result<(), String> {
 
 /// 越界構造掃描:返回所有被側條件排除的構造(如實申報,不假裝覆蓋)。
 /// 返回 (構造名, 出現的字節區間)。
+///
+/// 掃描以 token 流為底(raw string 已整體成為 RawString token)⇒
+/// raw string 內容中的 `trait` / `'a` 等文本**不構成**越界構造,無誤報。
 pub fn unsupported(src: &str) -> Vec<(&'static str, Span)> {
     let toks = r0_lex(src);
     let mut out = Vec::new();
-    for w in [
-        ("macro", "macro_rules"),
-        ("trait", "trait"),
-        ("impl", "impl"),
-        ("use", "use"),
-        ("mod", "mod"),
-        ("pub", "pub"),
-        ("unsafe", "unsafe"),
-        ("async", "async"),
-        ("match", "match"),
-        ("fn 泛型", "fn "), /* 佔位 */
-    ] {
-        let _ = w;
-    }
     // 詞法級:關鍵字與符號
-    let mut i = 0;
-    while i < toks.len() {
-        let t = &toks[i];
+    for t in &toks {
         match t.kind {
-            R0TokKind::Ident if i + 1 < toks.len() && toks[i + 1].span.start == t.span.end => {
-                // 直接相連的 ident(token 已按最長匹配,這裡是關鍵字檢查的替代路徑)
-            }
             R0TokKind::Not => out.push(("宏/否定 `!`(宏語法)", t.span)),
             R0TokKind::Bad => out.push(("非法符號(閉包 `|` 或 `<<` 等)", t.span)),
             _ => {}
         }
-        i += 1;
     }
+    // raw string 區間(token 感知:其內部文本不參與詞級掃描,無誤報)
+    let raw: Vec<Span> = toks
+        .iter()
+        .filter(|t| t.kind == R0TokKind::RawString)
+        .map(|t| t.span)
+        .collect();
+    let in_raw = |pos: usize| {
+        raw.iter()
+            .any(|sp| sp.start as usize <= pos && pos < sp.end as usize)
+    };
     // 詞級關鍵字
-    for kw in [
-        "trait",
-        "impl",
-        "use",
-        "mod",
-        "pub",
-        "unsafe",
-        "async",
-        "match",
-        "macro_rules",
-        "dyn",
-        "enum",
-        "type",
-        "static",
-        "const",
-        "extern",
-        "where",
-    ] {
+    for kw in EXCLUDED_ITEM_KWS {
         let mut from = 0;
         while let Some(pos) = src[from..].find(kw) {
             let start = from + pos;
             let end = start + kw.len();
-            // 必須是獨立詞(兩側為邊界)
+            // 必須是獨立詞(兩側為邊界),且不在 raw string 內
             let before_ok =
                 start == 0 || !src[..start].ends_with(|c: char| c.is_alphanumeric() || c == '_');
             let after = src[end..].chars().next();
             let after_ok =
                 after.is_none() || !after.unwrap().is_alphanumeric() && after.unwrap() != '_';
-            if before_ok && after_ok {
-                out.push((
-                    match kw {
-                        "trait" => "trait 項(排除)",
-                        "impl" => "impl 塊(排除)",
-                        "use" => "use 項(排除)",
-                        "mod" => "mod 項(排除)",
-                        "pub" => "可見性(pub,排除)",
-                        "unsafe" => "unsafe(排除)",
-                        "async" => "async(排除)",
-                        "match" => "match 模式(排除)",
-                        "macro_rules" => "macro_rules(排除)",
-                        "enum" => "enum 項(排除)",
-                        "type" => "type 項(排除)",
-                        "static" => "static(排除)",
-                        "const" => "const(排除)",
-                        "extern" => "extern(排除)",
-                        "where" => "where(排除)",
-                        _ => "dyn(排除)",
-                    },
-                    Span::new(start as u32, end as u32),
-                ));
+            if before_ok && after_ok && !in_raw(start) {
+                out.push((excluded_kw_note(kw), Span::new(start as u32, end as u32)));
             }
             from = end;
         }
     }
-    // 生命週期 `'a`(raw string 內部除外 —— raw string 已整體成為 RawString token,故無誤報)
+    // 生命週期 `'a`(raw string 內部除外 —— 同上 token 感知)
     let mut from = 0;
     let bytes = src.as_bytes();
     while from < bytes.len() {
@@ -494,10 +457,12 @@ pub fn unsupported(src: &str) -> Vec<(&'static str, Span)> {
             && from + 1 < bytes.len()
             && (bytes[from + 1].is_ascii_alphabetic() || bytes[from + 1] == b'_')
         {
-            out.push((
-                "生命週期 `'a`(排除)",
-                Span::new(from as u32, (from + 2) as u32),
-            ));
+            if !in_raw(from) {
+                out.push((
+                    "生命週期 `'a`(排除)",
+                    Span::new(from as u32, (from + 2) as u32),
+                ));
+            }
             from += 2;
             continue;
         }
@@ -520,7 +485,10 @@ pub fn lalr1_clean(src: &str) -> Result<(), String> {
         if t.kind == R0TokKind::Not {
             return Err(format!("`!`(宏語法,歧義) @ {:?}", t.span));
         }
-        structs.push(t.kind);
+        // 結構 token 序列(trivia 不入窗:空白不改變構造分類)
+        if t.kind != R0TokKind::Trivia {
+            structs.push(t.kind);
+        }
     }
     // 泛型實參模式:IDENT `<` IDENT(排除比較的判據在真實語法中需要 2 個 lookahead)
     for w in structs.windows(3) {
@@ -847,76 +815,17 @@ impl R0Tree {
     /// §1.2 連續性公理(與 CL0 同式):內部節點跨度 = [首子.start, 末子.end)
     /// 且子節點依序不交。
     pub fn validate_continuity(&self) -> Result<(), String> {
-        for (id, node) in self.nodes.iter().enumerate() {
-            if node.children.is_empty() {
-                continue;
-            }
-            let first = self.nodes[node.children[0] as usize].span;
-            let last = self.nodes[*node.children.last().unwrap() as usize].span;
-            if node.span != Span::new(first.start, last.end) {
-                return Err(format!(
-                    "node {} ({:?}) span {} != children union [{}, {})",
-                    id, node.kind, node.span, first.start, last.end
-                ));
-            }
-            let mut prev_end = first.start;
-            for &c in &node.children {
-                let cs = self.nodes[c as usize].span;
-                if cs.start < prev_end {
-                    return Err(format!(
-                        "node {} ({:?}) children overlap at {}",
-                        id, node.kind, c
-                    ));
-                }
-                prev_end = cs.end;
-            }
-        }
-        Ok(())
+        crate::tree::check_continuity(self)
     }
 
     /// 樹公理:每節點至多一父、自根連通。
     pub fn validate_tree_shapes(&self) -> Result<(), String> {
-        let mut parent_of = vec![u32::MAX; self.nodes.len()];
-        for (id, node) in self.nodes.iter().enumerate() {
-            for &c in &node.children {
-                if parent_of[c as usize] != u32::MAX {
-                    return Err(format!("node {} has two parents", c));
-                }
-                parent_of[c as usize] = id as u32;
-            }
-        }
-        let mut seen = vec![false; self.nodes.len()];
-        let mut stack = vec![0u32];
-        while let Some(id) = stack.pop() {
-            if seen[id as usize] {
-                continue;
-            }
-            seen[id as usize] = true;
-            for &c in &self.nodes[id as usize].children {
-                stack.push(c);
-            }
-        }
-        for (id, s) in seen.iter().enumerate() {
-            if !s {
-                return Err(format!("node {} unreachable from root", id));
-            }
-        }
-        Ok(())
+        crate::tree::check_tree_axioms(self)
     }
 
     /// L5 檢查:任意兩節點 span 要嘛嵌套、要嘛不交(laminar 族)。
     pub fn laminar_ok(&self) -> bool {
-        let n = self.nodes.len();
-        for i in 0..n {
-            let a = self.nodes[i].span;
-            for j in (i + 1)..n {
-                let b = self.nodes[j].span;
-                if a.overlaps(&b) && !a.contains(&b) && !b.contains(&a) {
-                    return false;
-                }
-            }
-        }
-        true
+        crate::tree::check_laminar(self)
     }
 
     /// ERROR 節點數(§2.3 全化的「錯誤面」度量)。
@@ -943,13 +852,7 @@ impl R0Tree {
 
     /// 無損回環:葉子節點文本依序拼接(source 順序 = id 順序)。
     pub fn unparse(&self) -> String {
-        let mut out = String::new();
-        for n in &self.nodes {
-            if n.children.is_empty() && n.kind != R0Kind::Root {
-                out.push_str(&self.src[n.span.start as usize..n.span.end as usize]);
-            }
-        }
-        out
+        crate::tree::unparse_all(self, &self.src)
     }
 
     /// 具名投影序列化(§1.3 的 R₀ 對應;決定論斷言用)。Unsupported 附 note。
@@ -981,7 +884,7 @@ impl R0Tree {
     }
 }
 
-/// item-起始位置的排除關鍵字(§9 側條件;與 legacy `unsupported` 掃描同集)。
+/// item-起始位置的排除關鍵字(§9 側條件;`unsupported` 掃描與解析器同集)。
 const EXCLUDED_ITEM_KWS: &[&str] = &[
     "trait",
     "impl",
@@ -1003,6 +906,31 @@ const EXCLUDED_ITEM_KWS: &[&str] = &[
 
 fn is_excluded_item_kw(w: &str) -> bool {
     EXCLUDED_ITEM_KWS.contains(&w)
+}
+
+/// 排除關鍵字的機讀申報標注(有限集 → 全部靜態,無堆分配)。
+/// `unsupported`(掃描器)與 `R0Parser::unsupported_item`(解析器)共用,
+/// 保證「同一構造、同一標注」(去重;此前的 per-call `Box::leak` 為記憶洩漏)。
+fn excluded_kw_note(w: &str) -> &'static str {
+    match w {
+        "trait" => "trait 項(排除)",
+        "impl" => "impl 塊(排除)",
+        "use" => "use 項(排除)",
+        "mod" => "mod 項(排除)",
+        "pub" => "可見性(pub,排除)",
+        "unsafe" => "unsafe(排除)",
+        "async" => "async(排除)",
+        "match" => "match 模式(排除)",
+        "macro_rules" => "macro_rules(排除)",
+        "dyn" => "dyn(排除)",
+        "enum" => "enum 項(排除)",
+        "type" => "type 項(排除)",
+        "static" => "static(排除)",
+        "const" => "const(排除)",
+        "extern" => "extern(排除)",
+        "where" => "where(排除)",
+        _ => "排除項",
+    }
 }
 
 fn tok_kind(t: R0TokKind) -> R0Kind {
@@ -1105,8 +1033,14 @@ impl R0Parser {
     fn cur_span(&self) -> Option<Span> {
         self.toks.get(self.pos).map(|t| t.span)
     }
+    /// 當前位置**之後**的首個結構 token 種類(trivia 感知:
+    /// `Vec < int` 與 `Vec<int>` 同一判定 —— 空白不改變構造分類)。
     fn peek2_kind(&self) -> Option<R0TokKind> {
-        self.toks.get(self.pos + 1).map(|t| t.kind)
+        self.toks
+            .iter()
+            .skip(self.pos + 1)
+            .find(|t| t.kind != R0TokKind::Trivia)
+            .map(|t| t.kind)
     }
     fn text(&self, sp: Span) -> &str {
         &self.src[sp.start as usize..sp.end as usize]
@@ -1140,10 +1074,10 @@ impl R0Parser {
         }
     }
 
-    /// 吞一個 token(先吸附前導 trivia),以指定 R0Kind 作為葉子附著。
-    fn bump(&mut self, kind: R0Kind) -> Result<Span, R0ParseIssue> {
+    /// 吞一個 token(先吸附前導 trivia)作為葉子附著;葉子種類取自 token 本身
+    /// (調用方已以 `cur_kind` 確認位置 —— 傳參指定種類曾造成「實得與聲明不符」的隱患,已移除)。
+    fn bump(&mut self) -> Result<Span, R0ParseIssue> {
         self.skip_trivia();
-        let _ = kind;
         let sp = match self.cur_span() {
             Some(sp) => sp,
             None => return Err(R0ParseIssue::Syntax),
@@ -1345,32 +1279,40 @@ impl R0Parser {
     fn parse_fn_item(&mut self) -> Result<(), R0ParseIssue> {
         let frame = self.stack.len();
         let id = self.open(R0Kind::FnItem)?;
-        self.bump(R0Kind::FnKw)?;
+        self.bump()?;
         if self.cur_kind() != Some(R0TokKind::Ident) {
             self.item_err(frame, id);
             return Ok(());
         }
-        self.bump(R0Kind::Ident)?;
+        self.bump()?;
         // params
         if self.cur_kind() != Some(R0TokKind::LParen) {
             self.item_err(frame, id);
             return Ok(());
         }
-        self.bump(R0Kind::LParen)?;
-        if let Err(R0ParseIssue::Syntax) = self.parse_params() {
-            self.item_err(frame, id);
-            return Ok(());
+        self.bump()?;
+        match self.parse_params() {
+            Ok(()) => {}
+            Err(R0ParseIssue::Depth) => return Err(R0ParseIssue::Depth),
+            Err(R0ParseIssue::Syntax) => {
+                self.item_err(frame, id);
+                return Ok(());
+            }
         }
         if self.cur_kind() != Some(R0TokKind::RParen) {
             self.item_err(frame, id);
             return Ok(());
         }
-        self.bump(R0Kind::RParen)?;
+        self.bump()?;
         if self.cur_kind() == Some(R0TokKind::Arrow) {
-            self.bump(R0Kind::Arrow)?;
-            if let Err(R0ParseIssue::Syntax) = self.parse_type() {
-                self.item_err(frame, id);
-                return Ok(());
+            self.bump()?;
+            match self.parse_type() {
+                Ok(()) => {}
+                Err(R0ParseIssue::Depth) => return Err(R0ParseIssue::Depth),
+                Err(R0ParseIssue::Syntax) => {
+                    self.item_err(frame, id);
+                    return Ok(());
+                }
             }
         }
         if self.cur_kind() != Some(R0TokKind::LBrace) {
@@ -1382,71 +1324,95 @@ impl R0Parser {
         Ok(())
     }
 
+    /// EBNF:`[ params ]`,`params = param { "," param }` ——
+    /// 不收導前逗號、不收尾隨逗號、不收雙逗號(EBNF 是合同,解析器不得過容)。
     fn parse_params(&mut self) -> Result<(), R0ParseIssue> {
-        loop {
-            match self.cur_kind() {
-                Some(R0TokKind::Comma) => {
-                    self.bump(R0Kind::Comma)?;
+        if matches!(self.cur_kind(), Some(R0TokKind::RParen) | None) {
+            return Ok(());
+        }
+        self.parse_param()?;
+        while self.cur_kind() == Some(R0TokKind::Comma) {
+            self.bump()?;
+            // 逗號後必須還有一個形參(Ident):尾隨/雙逗號/EOF 皆違 EBNF。
+            if self.cur_kind() != Some(R0TokKind::Ident) {
+                return Err(R0ParseIssue::Syntax);
+            }
+            self.parse_param()?;
+        }
+        Ok(())
+    }
+
+    /// 一個形參:`IDENT [": type"]`。
+    fn parse_param(&mut self) -> Result<(), R0ParseIssue> {
+        if self.cur_kind() != Some(R0TokKind::Ident) {
+            return Err(R0ParseIssue::Syntax);
+        }
+        let id = self.open(R0Kind::Param)?;
+        self.bump()?;
+        if self.cur_kind() == Some(R0TokKind::Colon) {
+            self.bump()?;
+            // 型別失敗 → 整個參數表由調用方(item_err)收場;Depth 如實上報。
+            match self.parse_type() {
+                Ok(()) => {}
+                Err(R0ParseIssue::Depth) => return Err(R0ParseIssue::Depth),
+                Err(R0ParseIssue::Syntax) => {
+                    self.set_kind(id, R0Kind::Error);
+                    return Err(R0ParseIssue::Syntax);
                 }
-                Some(R0TokKind::RParen) | None => return Ok(()),
-                Some(R0TokKind::Ident) => {
-                    let id = self.open(R0Kind::Param)?;
-                    self.bump(R0Kind::Ident)?;
-                    if self.cur_kind() == Some(R0TokKind::Colon) {
-                        self.bump(R0Kind::Colon)?;
-                        // 型別失敗 → 整個參數表由調用方(item_err)收場。
-                        // 直接記 Err 而不在這裡轉換(由 parse_fn_item 統一處理)。
-                        if let Err(R0ParseIssue::Syntax) = self.parse_type() {
-                            self.set_kind(id, R0Kind::Error);
-                            return Err(R0ParseIssue::Syntax);
-                        }
-                    }
-                    self.close();
-                    let _ = id;
-                    if self.cur_kind() == Some(R0TokKind::Comma) {
-                        self.bump(R0Kind::Comma)?;
-                    } else {
-                        return Ok(());
-                    }
-                }
-                _ => return Err(R0ParseIssue::Syntax),
             }
         }
+        self.close();
+        Ok(())
     }
 
     fn parse_struct_item(&mut self) -> Result<(), R0ParseIssue> {
         let frame = self.stack.len();
         let id = self.open(R0Kind::StructItem)?;
-        self.bump(R0Kind::StructKw)?;
+        self.bump()?;
         if self.cur_kind() != Some(R0TokKind::Ident) {
             self.item_err(frame, id);
             return Ok(());
         }
-        self.bump(R0Kind::Ident)?;
+        self.bump()?;
         if self.cur_kind() != Some(R0TokKind::LBrace) {
             self.item_err(frame, id);
             return Ok(());
         }
-        self.bump(R0Kind::LBrace)?;
+        self.bump()?;
+        // EBNF:`[ field { "," field } [","] ]` —— 不收導前逗號、不收雙逗號,
+        // 尾隨逗號合法(EBNF 是合同,解析器不得過容)。
+        let mut seen_field = false;
         loop {
             self.skip_trivia();
             match self.cur_kind() {
                 None => break,
                 Some(R0TokKind::RBrace) => {
-                    self.bump(R0Kind::RBrace)?;
+                    self.bump()?;
                     break;
                 }
                 Some(R0TokKind::Comma) => {
-                    self.bump(R0Kind::Comma)?;
+                    if !seen_field {
+                        self.item_err(frame, id);
+                        return Ok(());
+                    }
+                    self.bump()?;
+                    // 逗號後:下一個 field(Ident)或尾隨閉合(RBrace);雙逗號/EOF 皆違 EBNF。
+                    if !matches!(
+                        self.cur_kind(),
+                        Some(R0TokKind::Ident) | Some(R0TokKind::RBrace)
+                    ) {
+                        self.item_err(frame, id);
+                        return Ok(());
+                    }
                 }
                 Some(R0TokKind::Ident) => {
                     let fid = self.open(R0Kind::FieldDef)?;
-                    self.bump(R0Kind::Ident)?;
+                    self.bump()?;
                     if self.cur_kind() != Some(R0TokKind::Colon) {
                         self.item_err(frame, id);
                         return Ok(());
                     }
-                    self.bump(R0Kind::Colon)?;
+                    self.bump()?;
                     match self.parse_type() {
                         Ok(()) => {}
                         Err(R0ParseIssue::Depth) => return Err(R0ParseIssue::Depth),
@@ -1457,6 +1423,7 @@ impl R0Parser {
                     }
                     self.close();
                     let _ = fid;
+                    seen_field = true;
                 }
                 _ => {
                     self.item_err(frame, id);
@@ -1472,7 +1439,7 @@ impl R0Parser {
         let _id = self.open(R0Kind::TypeRef)?;
         match self.cur_kind() {
             Some(R0TokKind::Ident) => {
-                self.bump(R0Kind::Ident)?;
+                self.bump()?;
                 // 泛型實參歧義 IDENT<IDENT(與 lalr1_clean 同判據)→ Unsupported。
                 if self.cur_kind() == Some(R0TokKind::Lt)
                     && self.peek2_kind() == Some(R0TokKind::Ident)
@@ -1481,16 +1448,16 @@ impl R0Parser {
                 }
             }
             Some(R0TokKind::Amp) | Some(R0TokKind::AmpMut) => {
-                self.bump(R0Kind::Amp)?;
+                self.bump()?;
                 self.parse_type()?;
             }
             Some(R0TokKind::LBrack) => {
-                self.bump(R0Kind::LBrack)?;
+                self.bump()?;
                 self.parse_type()?;
                 if self.cur_kind() != Some(R0TokKind::RBrack) {
                     return Err(R0ParseIssue::Syntax);
                 }
-                self.bump(R0Kind::RBrack)?;
+                self.bump()?;
             }
             Some(R0TokKind::Bad) => {
                 // 詞法級側條件(生命週期 `'a` / 屬性 `#` 等,§9):節點級 Unsupported,
@@ -1515,13 +1482,13 @@ impl R0Parser {
             return Err(R0ParseIssue::Syntax);
         }
         let _id = self.open(R0Kind::Block)?;
-        self.bump(R0Kind::LBrace)?;
+        self.bump()?;
         loop {
             self.skip_trivia();
             match self.cur_kind() {
                 None => break,
                 Some(R0TokKind::RBrace) => {
-                    self.bump(R0Kind::RBrace)?;
+                    self.bump()?;
                     break;
                 }
                 _ => self.parse_stmt()?,
@@ -1573,7 +1540,7 @@ impl R0Parser {
                         return Ok(());
                     }
                 } else {
-                    self.bump(R0Kind::Semi)?;
+                    self.bump()?;
                 }
                 self.close();
                 Ok(())
@@ -1583,24 +1550,28 @@ impl R0Parser {
 
     fn parse_let(&mut self, frame: usize) -> Result<(), R0ParseIssue> {
         let id = self.open(R0Kind::LetStmt)?;
-        self.bump(R0Kind::LetKw)?;
+        self.bump()?;
         if self.cur_kind() == Some(R0TokKind::Mut) {
-            self.bump(R0Kind::MutKw)?;
+            self.bump()?;
         }
         if self.cur_kind() != Some(R0TokKind::Ident) {
             self.stmt_err(frame, id);
             return Ok(());
         }
-        self.bump(R0Kind::Ident)?;
+        self.bump()?;
         if self.cur_kind() == Some(R0TokKind::Colon) {
-            self.bump(R0Kind::Colon)?;
-            if let Err(R0ParseIssue::Syntax) = self.parse_type() {
-                self.stmt_err(frame, id);
-                return Ok(());
+            self.bump()?;
+            match self.parse_type() {
+                Ok(()) => {}
+                Err(R0ParseIssue::Depth) => return Err(R0ParseIssue::Depth),
+                Err(R0ParseIssue::Syntax) => {
+                    self.stmt_err(frame, id);
+                    return Ok(());
+                }
             }
         }
         if self.cur_kind() == Some(R0TokKind::Eq) {
-            self.bump(R0Kind::Eq)?;
+            self.bump()?;
             if self.cur_kind() == Some(R0TokKind::Semi) {
                 self.stmt_err(frame, id);
                 return Ok(());
@@ -1618,14 +1589,14 @@ impl R0Parser {
             self.stmt_err(frame, id);
             return Ok(());
         }
-        self.bump(R0Kind::Semi)?;
+        self.bump()?;
         self.close();
         Ok(())
     }
 
     fn parse_return(&mut self, frame: usize) -> Result<(), R0ParseIssue> {
         let id = self.open(R0Kind::ReturnStmt)?;
-        self.bump(R0Kind::ReturnKw)?;
+        self.bump()?;
         if self.expr_start() {
             match self.parse_expr() {
                 Ok(_) => {}
@@ -1640,14 +1611,14 @@ impl R0Parser {
             self.stmt_err(frame, id);
             return Ok(());
         }
-        self.bump(R0Kind::Semi)?;
+        self.bump()?;
         self.close();
         Ok(())
     }
 
     fn parse_if(&mut self, frame: usize) -> Result<(), R0ParseIssue> {
         let id = self.open(R0Kind::IfStmt)?;
-        self.bump(R0Kind::IfKw)?;
+        self.bump()?;
         if !self.expr_start() {
             self.stmt_err(frame, id);
             return Ok(());
@@ -1666,7 +1637,7 @@ impl R0Parser {
         }
         self.parse_block()?;
         if self.cur_kind() == Some(R0TokKind::Else) {
-            self.bump(R0Kind::ElseKw)?;
+            self.bump()?;
             if self.cur_kind() == Some(R0TokKind::If) {
                 self.parse_if(frame)?;
             } else if self.cur_kind() == Some(R0TokKind::LBrace) {
@@ -1682,7 +1653,7 @@ impl R0Parser {
 
     fn parse_while(&mut self, frame: usize) -> Result<(), R0ParseIssue> {
         let id = self.open(R0Kind::WhileStmt)?;
-        self.bump(R0Kind::WhileKw)?;
+        self.bump()?;
         if !self.expr_start() {
             self.stmt_err(frame, id);
             return Ok(());
@@ -1706,7 +1677,7 @@ impl R0Parser {
 
     fn parse_loop(&mut self, frame: usize) -> Result<(), R0ParseIssue> {
         let id = self.open(R0Kind::LoopStmt)?;
-        self.bump(R0Kind::LoopKw)?;
+        self.bump()?;
         if self.cur_kind() != Some(R0TokKind::LBrace) {
             self.stmt_err(frame, id);
             return Ok(());
@@ -1752,14 +1723,10 @@ impl R0Parser {
     }
 
     fn unsupported_item(&mut self) -> Result<(), R0ParseIssue> {
+        // 排除關鍵字是有限集 → note 全取靜態表(此前的 per-call Box::leak 為記憶洩漏)。
         let note = match self.cur_text() {
             Some("match") => "match 模式(排除)",
-            Some(w) => {
-                let mut s = String::with_capacity(w.len() + 8);
-                s.push_str(w);
-                s.push_str(" 項(排除)");
-                Box::leak(s.into_boxed_str())
-            }
+            Some(w) => excluded_kw_note(w),
             None => "排除項",
         };
         // 先吞關鍵字本身,再吸收殘骸(否則 Item 模式的 stop_before 會停在
@@ -1817,7 +1784,7 @@ impl R0Parser {
     fn parse_assign_body(&mut self) -> Result<(), R0ParseIssue> {
         self.parse_or_body()?;
         if self.cur_kind() == Some(R0TokKind::Eq) {
-            self.bump(R0Kind::Eq)?;
+            self.bump()?;
             self.parse_assign_body()?;
         }
         Ok(())
@@ -1826,7 +1793,7 @@ impl R0Parser {
     fn parse_or_body(&mut self) -> Result<(), R0ParseIssue> {
         self.parse_and_body()?;
         while self.cur_kind() == Some(R0TokKind::OrOr) {
-            self.bump(R0Kind::OrOr)?;
+            self.bump()?;
             self.parse_and_body()?;
         }
         Ok(())
@@ -1835,7 +1802,7 @@ impl R0Parser {
     fn parse_and_body(&mut self) -> Result<(), R0ParseIssue> {
         self.parse_eq_body()?;
         while self.cur_kind() == Some(R0TokKind::AndAnd) {
-            self.bump(R0Kind::AndAnd)?;
+            self.bump()?;
             self.parse_eq_body()?;
         }
         Ok(())
@@ -1845,12 +1812,7 @@ impl R0Parser {
         self.parse_rel_body()?;
         while self.cur_kind() == Some(R0TokKind::EqEq) || self.cur_kind() == Some(R0TokKind::NotEq)
         {
-            let k = if self.cur_kind() == Some(R0TokKind::EqEq) {
-                R0Kind::EqEq
-            } else {
-                R0Kind::NotEq
-            };
-            self.bump(k)?;
+            self.bump()?;
             self.parse_rel_body()?;
         }
         Ok(())
@@ -1862,13 +1824,7 @@ impl R0Parser {
             self.cur_kind(),
             Some(R0TokKind::Lt) | Some(R0TokKind::Le) | Some(R0TokKind::Gt) | Some(R0TokKind::Ge)
         ) {
-            let k = match self.cur_kind().unwrap() {
-                R0TokKind::Lt => R0Kind::Lt,
-                R0TokKind::Le => R0Kind::Le,
-                R0TokKind::Gt => R0Kind::Gt,
-                _ => R0Kind::Ge,
-            };
-            self.bump(k)?;
+            self.bump()?;
             self.parse_add_body()?;
         }
         Ok(())
@@ -1880,12 +1836,7 @@ impl R0Parser {
             self.cur_kind(),
             Some(R0TokKind::Plus) | Some(R0TokKind::Minus)
         ) {
-            let k = if self.cur_kind() == Some(R0TokKind::Plus) {
-                R0Kind::Plus
-            } else {
-                R0Kind::Minus
-            };
-            self.bump(k)?;
+            self.bump()?;
             self.parse_mul_body()?;
         }
         Ok(())
@@ -1897,12 +1848,7 @@ impl R0Parser {
             self.cur_kind(),
             Some(R0TokKind::Star) | Some(R0TokKind::Slash) | Some(R0TokKind::Percent)
         ) {
-            let k = match self.cur_kind().unwrap() {
-                R0TokKind::Star => R0Kind::Star,
-                R0TokKind::Slash => R0Kind::Slash,
-                _ => R0Kind::Percent,
-            };
-            self.bump(k)?;
+            self.bump()?;
             self.parse_unary()?;
         }
         Ok(())
@@ -1914,17 +1860,10 @@ impl R0Parser {
             | Some(R0TokKind::AmpMut)
             | Some(R0TokKind::Star)
             | Some(R0TokKind::Not) => {
-                let id = self.open(R0Kind::UnaryExpr)?;
-                let k = match self.cur_kind().unwrap() {
-                    R0TokKind::Amp => R0Kind::Amp,
-                    R0TokKind::AmpMut => R0Kind::AmpMut,
-                    R0TokKind::Star => R0Kind::Star,
-                    _ => R0Kind::Not,
-                };
-                self.bump(k)?;
+                let _id = self.open(R0Kind::UnaryExpr)?;
+                self.bump()?;
                 self.parse_postfix()?;
                 self.close();
-                let _ = id;
                 Ok(())
             }
             _ => self.parse_postfix(),
@@ -1936,29 +1875,29 @@ impl R0Parser {
         loop {
             match self.cur_kind() {
                 Some(R0TokKind::Dot) => {
-                    self.bump(R0Kind::Dot)?;
+                    self.bump()?;
                     if self.cur_kind() != Some(R0TokKind::Ident) {
                         return Err(R0ParseIssue::Syntax);
                     }
-                    self.bump(R0Kind::Ident)?;
+                    self.bump()?;
                 }
                 Some(R0TokKind::LBrack) => {
-                    self.bump(R0Kind::LBrack)?;
+                    self.bump()?;
                     let _ = self.parse_expr()?;
                     if self.cur_kind() != Some(R0TokKind::RBrack) {
                         return Err(R0ParseIssue::Syntax);
                     }
-                    self.bump(R0Kind::RBrack)?;
+                    self.bump()?;
                 }
                 Some(R0TokKind::LParen) => {
-                    self.bump(R0Kind::LParen)?;
+                    self.bump()?;
                     loop {
                         if self.cur_kind() == Some(R0TokKind::RParen) || self.cur_kind().is_none() {
                             break;
                         }
                         let _ = self.parse_expr()?;
                         if self.cur_kind() == Some(R0TokKind::Comma) {
-                            self.bump(R0Kind::Comma)?;
+                            self.bump()?;
                         } else {
                             break;
                         }
@@ -1966,7 +1905,7 @@ impl R0Parser {
                     if self.cur_kind() != Some(R0TokKind::RParen) {
                         return Err(R0ParseIssue::Syntax);
                     }
-                    self.bump(R0Kind::RParen)?;
+                    self.bump()?;
                 }
                 Some(R0TokKind::Not) => {
                     // 宏調用 `foo!(…)`(側條件排除)。
@@ -1981,23 +1920,23 @@ impl R0Parser {
     fn parse_primary(&mut self) -> Result<(), R0ParseIssue> {
         match self.cur_kind() {
             Some(R0TokKind::Number) => {
-                self.bump(R0Kind::Number)?;
+                self.bump()?;
                 Ok(())
             }
             Some(R0TokKind::True) => {
-                self.bump(R0Kind::TrueKw)?;
+                self.bump()?;
                 Ok(())
             }
             Some(R0TokKind::False) => {
-                self.bump(R0Kind::FalseKw)?;
+                self.bump()?;
                 Ok(())
             }
             Some(R0TokKind::RawString) => {
-                self.bump(R0Kind::RawString)?;
+                self.bump()?;
                 Ok(())
             }
             Some(R0TokKind::Ident) => {
-                self.bump(R0Kind::Ident)?;
+                self.bump()?;
                 if self.cur_kind() == Some(R0TokKind::Lt)
                     && self.peek2_kind() == Some(R0TokKind::Ident)
                 {
@@ -2007,7 +1946,7 @@ impl R0Parser {
                 Ok(())
             }
             Some(R0TokKind::LParen) => {
-                self.bump(R0Kind::LParen)?;
+                self.bump()?;
                 if self.cur_kind() == Some(R0TokKind::RParen) {
                     return Err(R0ParseIssue::Syntax);
                 }
@@ -2015,7 +1954,7 @@ impl R0Parser {
                 if self.cur_kind() != Some(R0TokKind::RParen) {
                     return Err(R0ParseIssue::Syntax);
                 }
-                self.bump(R0Kind::RParen)?;
+                self.bump()?;
                 Ok(())
             }
             Some(R0TokKind::LBrace) => self.parse_block(),
@@ -2240,4 +2179,144 @@ fn r0_parse_determinism_named_sexp() {
         "named sexp must be structural: {}",
         a.named_sexp()
     );
+}
+
+// ===========================================================================
+// 回歸測試(除錯批次 2026-09-07):EBNF 合同 / 詞法邊界 / raw string 免疫 /
+// 空白不敏感判定 / Depth 如實上報。每個測試對應一個已實證修復的缺陷。
+// ===========================================================================
+
+#[test]
+fn r0_params_strict_ebnf() {
+    // 合同:fn_item = "fn" IDENT "(" [ params ] ")"; params = param { "," param }。
+    // 解析器不得過容:導前逗號 / 尾隨逗號 / 雙逗號 / 空參表逗號 皆違 EBNF。
+    for src in [
+        "fn f(,) {}",
+        "fn f(, a: int) {}",
+        "fn f(a: int,) {}",
+        "fn f(a, ) {}",
+    ] {
+        let t = r0_parse(src).expect("totalization: any input yields a tree");
+        assert!(
+            t.has_error(),
+            "EBNF violation must be an Error node: {:?} (params = param {{\",\" param }})",
+            src
+        );
+        assert_eq!(t.unparse(), src, "roundtrip holds on {:?}", src);
+    }
+    // 合法形(含多參數)不得受影響。
+    for src in [
+        "fn f() {}",
+        "fn f(a: int) {}",
+        "fn f(a: int, b: &mut int) {}",
+    ] {
+        let t = r0_parse(src).expect("legal must parse");
+        assert!(!t.has_error(), "legal params must not error: {:?}", src);
+        assert!(
+            t.unsupported_spans().is_empty(),
+            "legal params must not be unsupported: {:?}",
+            src
+        );
+    }
+}
+
+#[test]
+fn r0_struct_fields_strict_ebnf() {
+    // 合同:struct_item 字段 = [ field { "," field } [","] ] ——
+    // 尾隨逗號合法,導前逗號 / 雙逗號違 EBNF。
+    for src in ["struct S { a: int, , }", "struct S { , a: int }"] {
+        let t = r0_parse(src).expect("totalization");
+        assert!(
+            t.has_error(),
+            "EBNF violation must be an Error node: {:?}",
+            src
+        );
+    }
+    // 合法(含尾隨逗號)。
+    for src in ["struct S { a: int }", "struct S { a: int, b: &mut int, }"] {
+        let t = r0_parse(src).expect("legal struct must parse");
+        assert!(!t.has_error(), "legal fields must not error: {:?}", src);
+    }
+}
+
+#[test]
+fn r0_unsupported_skips_raw_string() {
+    // raw string 已整體成為 RawString token ⇒ 其內部文本不是越界構造(無誤報)。
+    let u = unsupported("let s = r#\"trait impl use\"#;");
+    assert!(
+        u.is_empty(),
+        "keywords inside raw string are not unsupported: {:?}",
+        u
+    );
+    let u2 = unsupported("let s = r#\"it's here\"#;");
+    assert!(
+        u2.is_empty(),
+        "lifetime-looking text inside raw string is not unsupported: {:?}",
+        u2
+    );
+    // 真越界構造仍被申報(raw string 之外)。
+    let u3 = unsupported("fn f() { let c = |a| a; } trait T { }");
+    assert!(
+        !u3.is_empty(),
+        "real unsupported constructs outside raw string still reported: {:?}",
+        u3
+    );
+}
+
+#[test]
+fn r0_spaced_generic_is_unsupported_not_error() {
+    // 空白不改變構造分類:IDENT < IDENT 帶空格與不帶空格同一判據(Unsupported,非 Error)。
+    let a = r0_parse("fn f(x: Vec<int>) {}").unwrap();
+    let b = r0_parse("fn f(x: Vec < int>) {}").unwrap();
+    assert!(
+        !a.has_error() && a.unsupported_spans().len() == 1,
+        "no-space generic → one Unsupported node"
+    );
+    assert!(
+        !b.has_error() && b.unsupported_spans().len() == 1,
+        "spaced generic must be Unsupported (not Error): has_error={}, unsup={:?}",
+        b.has_error(),
+        b.unsupported_spans()
+    );
+    // 同一 note。
+    assert_eq!(a.unsupported_spans()[0].1, b.unsupported_spans()[0].1);
+    // lalr1_clean 同一判定。
+    assert!(lalr1_clean("let v: Vec<int> = v;").is_err());
+    assert!(lalr1_clean("let v: Vec < int> = v;").is_err());
+}
+
+#[test]
+fn r0_lex_ampmut_word_boundary() {
+    // `&mut` 合併需 `mut` 為完整詞(與 rustc 分詞一致);EOF 邊界不遺漏。
+    let ks = |src: &str| {
+        r0_lex(src)
+            .into_iter()
+            .map(|t| format!("{:?}", t.kind))
+            .collect::<Vec<_>>()
+    };
+    // EOF 邊界:此前 `i + 3 < len` 漏掉恰好結尾的 `&mut`。
+    assert_eq!(ks("&mut"), vec!["AmpMut"]);
+    // 完整詞:合併。
+    assert_eq!(ks("&mut x"), vec!["AmpMut", "Trivia", "Ident"]);
+    // 非完整詞:`&mutx` = `&` + `mutx`(rustc 分詞)。
+    assert_eq!(ks("&mutx"), vec!["Amp", "Ident"]);
+    // `&&` 不受影響。
+    assert_eq!(ks("&&"), vec!["AndAnd"]);
+}
+
+#[test]
+fn r0_depth_reported_not_swallowed() {
+    // 引擎遞歸極限必須如實上報 Err(Depth),不得被吞成 Ok(Error 節點)。
+    let amp = " &".repeat(80);
+    let src_param = format!("fn f(a:{amp} int) {{}}");
+    let src_let = format!("fn f() {{ let x:{amp} int = 1; }}");
+    let src_ret = format!("fn f() -> {amp} int {{}}");
+    for (name, src) in [("param", &src_param), ("let", &src_let), ("ret", &src_ret)] {
+        let r = r0_parse(src);
+        assert!(
+            matches!(r, Err(R0ParseIssue::Depth)),
+            "deep type in {name} must report Err(Depth), got {:?}",
+            r.as_ref().map(|t| (t.has_error(), t.total_nodes()))
+        );
+    }
 }
