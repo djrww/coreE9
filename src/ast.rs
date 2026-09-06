@@ -161,6 +161,12 @@ pub fn extract(t: &Tree) -> Facts {
     facts
 }
 
+/// 聲明位置表:LetStmt / Param 節點 id → 綁定索引。
+/// P4-1a(2026-09-06):事件遍行以本表直接定位綁定 —— 此前遍行期間作用域棧
+/// 為空(collect_decls 已全部彈出),名稱查找永遠落空,事件層真空
+/// (ORACLE-TRACE §一 發現 #1)。
+type DeclSite = std::collections::HashMap<u32, usize>;
+
 fn lookup<'a>(scopes: &'a [Vec<usize>], facts: &'a Facts, name: &str) -> Option<usize> {
     for scope in scopes.iter().rev() {
         for &b in scope.iter().rev() {
@@ -187,6 +193,7 @@ fn collect_decls(
     facts: &mut Facts,
     scopes: &mut Vec<Vec<usize>>,
     param_scope: bool,
+    decl_site: &mut DeclSite,
 ) {
     let n = t.node(node);
     match n.kind {
@@ -211,10 +218,11 @@ fn collect_decls(
                         is_param: true,
                         scope: t.node(body).span,
                     });
+                    decl_site.insert(c, b);
                     scopes.last_mut().unwrap().push(b);
                 }
             }
-            collect_decls(t, body, facts, scopes, false);
+            collect_decls(t, body, facts, scopes, false, decl_site);
             scopes.pop();
         }
         Kind::Block => {
@@ -242,15 +250,16 @@ fn collect_decls(
                             is_param: false,
                             scope: t.node(node).span,
                         });
+                        decl_site.insert(c, b);
                         scopes.last_mut().unwrap().push(b);
                         // rhs 中的嵌套塊(block-expr)仍要掃
-                        scan_nested_blocks(t, c, facts, scopes);
+                        scan_nested_blocks(t, c, facts, scopes, decl_site);
                     }
                     Kind::IfStmt | Kind::WhileStmt => {
                         // if / while 的子塊
                         for cc in t.node(c).children.clone() {
                             if matches!(t.node(cc).kind, Kind::Block | Kind::IfStmt) {
-                                collect_decls(t, cc, facts, scopes, false);
+                                collect_decls(t, cc, facts, scopes, false, decl_site);
                             }
                         }
                     }
@@ -264,17 +273,23 @@ fn collect_decls(
     let _ = param_scope;
 }
 
-fn scan_nested_blocks(t: &Tree, node: u32, facts: &mut Facts, scopes: &mut Vec<Vec<usize>>) {
+fn scan_nested_blocks(
+    t: &Tree,
+    node: u32,
+    facts: &mut Facts,
+    scopes: &mut Vec<Vec<usize>>,
+    decl_site: &mut DeclSite,
+) {
     for c in t.node(node).children.clone() {
         if t.node(c).kind == Kind::Block {
-            collect_decls(t, c, facts, scopes, false);
+            collect_decls(t, c, facts, scopes, false, decl_site);
         } else if t.node(c).kind == Kind::Expr {
-            scan_nested_blocks(t, c, facts, scopes);
+            scan_nested_blocks(t, c, facts, scopes, decl_site);
         } else if t.node(c).kind == Kind::CallExpr {
             // 參數中的 block-expr
             for cc in t.node(c).children.clone() {
                 if t.node(cc).kind == Kind::Expr || t.node(cc).kind == Kind::Block {
-                    scan_nested_blocks(t, cc, facts, scopes);
+                    scan_nested_blocks(t, cc, facts, scopes, decl_site);
                 }
             }
         }
@@ -292,10 +307,18 @@ enum Ctx {
 }
 
 fn walk_item_scope(t: &Tree, node: u32, facts: &mut Facts, scopes: &mut Vec<Vec<usize>>) {
-    // 第一遍:decls
-    collect_decls(t, node, facts, scopes, false);
-    // 第二遍:events(需要兩遍:事件要綁定到已知 storage)
-    let mut e = EventCollector { t, facts, scopes };
+    // 第一遍:decls(順帶建立 decl_site:節點 → 綁定索引)
+    let mut decl_site: DeclSite = DeclSite::new();
+    collect_decls(t, node, facts, scopes, false, &mut decl_site);
+    // 第二遍:events(需要兩遍:事件要綁定到已知 storage)。
+    // P4-1a:遍行期間真正管理作用域棧(FnItem 參數層 / Block 層 / let 後註冊),
+    // 並以 decl_site 定位宣告 —— 修復「事件層真空」(ORACLE-TRACE §一 發現 #1)。
+    let mut e = EventCollector {
+        t,
+        facts,
+        scopes,
+        decl_site: &decl_site,
+    };
     e.walk_node(node, Ctx::Value);
 }
 
@@ -303,6 +326,7 @@ struct EventCollector<'a> {
     t: &'a Tree,
     facts: &'a mut Facts,
     scopes: &'a mut Vec<Vec<usize>>,
+    decl_site: &'a DeclSite,
 }
 
 impl<'a> EventCollector<'a> {
@@ -324,60 +348,34 @@ impl<'a> EventCollector<'a> {
         match kind {
             Kind::FnItem => {
                 if let Some(body) = child_of_kind(self.t, node, Kind::Block) {
+                    // 參數作用域(fn body 層)
+                    self.scopes.push(Vec::new());
+                    for c in self.t.node(node).children.clone() {
+                        if self.t.node(c).kind == Kind::Param {
+                            if let Some(&b) = self.decl_site.get(&c) {
+                                self.scopes.last_mut().unwrap().push(b);
+                            }
+                        }
+                    }
                     self.walk_node(body, Ctx::Value);
+                    self.scopes.pop();
                 }
             }
             Kind::Block => {
+                self.scopes.push(Vec::new());
                 for c in self.t.node(node).children.clone() {
-                    self.walk_node(c, Ctx::Value);
+                    if self.t.node(c).kind == Kind::LetStmt {
+                        self.walk_let(c); // init 走完才註冊綁定(遮蔽語義,見 walk_let)
+                    } else {
+                        self.walk_node(c, Ctx::Value);
+                    }
                 }
+                self.scopes.pop();
             }
             Kind::LetStmt => {
-                // let [mut] IDENT [= expr] ;
-                let mut expr_node = None;
-                let mut name_node = None;
-                for c in self.t.node(node).children.clone() {
-                    match self.t.node(c).kind {
-                        Kind::Ident => {
-                            if name_node.is_none() {
-                                name_node = Some(c);
-                            }
-                        }
-                        Kind::Expr => expr_node = Some(c),
-                        _ => {}
-                    }
-                }
-                if let Some(nn) = name_node {
-                    let name = name_of(self.t, nn);
-                    let span = self.t.node(nn).span;
-                    self.emit(&name, span, EvKind::Decl);
-                    // 借鏈檢測:`let r = &x;` / `let r = &mut x;`
-                    if let Some(en) = expr_node {
-                        let borrowed = self.walk_expr_for_borrow(en);
-                        if let Some((src, borrow_kind)) = borrowed {
-                            let rbi = self
-                                .scopes
-                                .last()
-                                .unwrap()
-                                .iter()
-                                .rev()
-                                .find(|&&b| self.facts.bindings[b].name == name)
-                                .copied();
-                            if let Some(rb) = rbi {
-                                if let Some(sb) = lookup(self.scopes, self.facts, &src) {
-                                    self.facts.links.push(BorrowLink {
-                                        ref_binding: rb,
-                                        src_binding: sb,
-                                        kind: borrow_kind,
-                                        span,
-                                    });
-                                }
-                            }
-                        } else {
-                            self.walk_node(en, Ctx::Value);
-                        }
-                    }
-                }
+                // 語句位置的 let 由 Block 臂分派到 walk_let;此臂只服務
+                // 非語句位置的殘餘路徑(如 ERROR 吸收區邊緣),保守透傳。
+                self.walk_let(node);
             }
             Kind::IfStmt | Kind::WhileStmt => {
                 for c in self.t.node(node).children.clone() {
@@ -493,8 +491,57 @@ impl<'a> EventCollector<'a> {
         }
     }
 
-    /// 若 expr 是 `&x` / `&mut x`,返回 (源名, 借用種類)。
-    fn walk_expr_for_borrow(&mut self, en: u32) -> Option<(String, EvKind)> {
+    /// `let [mut] IDENT [= expr];` —— P4-1a 重寫:Decl 以 decl_site 定位;
+    /// 借用初始化同時發**借用事件**(舊碼只建鏈不發事件 —— 真空下未曝光)
+    /// 且鏈 span 取源 ident(修 ORACLE-TRACE §一 發現 #2:配對死代碼);
+    /// init 走完才註冊綁定(遮蔽語義:`let x = x + 1;` 的 RHS 指外層)。
+    fn walk_let(&mut self, node: u32) {
+        let mut expr_node = None;
+        let mut name_node = None;
+        for c in self.t.node(node).children.clone() {
+            match self.t.node(c).kind {
+                Kind::Ident => {
+                    if name_node.is_none() {
+                        name_node = Some(c);
+                    }
+                }
+                Kind::Expr => expr_node = Some(c),
+                _ => {}
+            }
+        }
+        let Some(nn) = name_node else {
+            return; // 半截 let:如實跳過
+        };
+        let Some(&b) = self.decl_site.get(&node) else {
+            return;
+        };
+        let span = self.t.node(nn).span;
+        self.facts.events.push(Event {
+            binding: b,
+            kind: EvKind::Decl,
+            span,
+        });
+        if let Some(en) = expr_node {
+            if let Some((src, borrow_kind, src_span)) = self.walk_expr_for_borrow(en) {
+                // 借用事件落在源綁定上;借鏈錨定同一 span(Referent 軌配對)
+                self.emit(&src, src_span, borrow_kind);
+                if let Some(sb) = lookup(self.scopes, self.facts, &src) {
+                    self.facts.links.push(BorrowLink {
+                        ref_binding: b,
+                        src_binding: sb,
+                        kind: borrow_kind,
+                        span: src_span,
+                    });
+                }
+            } else {
+                self.walk_node(en, Ctx::Value);
+            }
+        }
+        self.scopes.last_mut().unwrap().push(b);
+    }
+
+    /// 若 expr 是 `&x` / `&mut x`,返回 (源名, 借用種類, 源 ident span)。
+    fn walk_expr_for_borrow(&mut self, en: u32) -> Option<(String, EvKind, Span)> {
         // Expr → UnaryExpr → [Amp, (Mut), Ident]
         let mut unary = None;
         for c in self.t.node(en).children.clone() {
@@ -505,15 +552,19 @@ impl<'a> EventCollector<'a> {
         let un = unary?;
         let mut kind: Option<EvKind> = None;
         let mut name = None;
+        let mut src_span = None;
         for c in self.t.node(un).children.clone() {
             match self.t.node(c).kind {
                 Kind::Amp => kind = Some(EvKind::BorrowSh),
                 Kind::MutKw => kind = Some(EvKind::BorrowMut),
-                Kind::Ident => name = Some(name_of(self.t, c)),
+                Kind::Ident => {
+                    name = Some(name_of(self.t, c));
+                    src_span = Some(self.t.node(c).span);
+                }
                 _ => {}
             }
         }
-        Some((name?, kind?))
+        Some((name?, kind?, src_span?))
     }
 }
 
@@ -578,13 +629,18 @@ pub fn intervals(facts: &Facts, track: Track) -> (Vec<Vec<Interval>>, Vec<Event>
             }
             Track::Referent => {
                 if matches!(ev.kind, EvKind::BorrowSh | EvKind::BorrowMut) {
-                    // 借用事件:活躍到「被借引用」的最後使用(任何事件)或作用域末
+                    // 借用事件:活躍到「被借引用」的最後使用(borrow's liveness)。
+                    // ⚠ 2026-09-06 修正(ORACLE-TRACE 發現 #3):終點初值原為
+                    // `scope.end`,再 `.max(使用點)` —— 只能伸、不能縮,借用活性
+                    // 因而恆延至作用域末(過度保守)。正確語義:最後使用點;
+                    // 無使用 ⇒ 立即死亡(與 NLL「未用借用即死」一致)。
+                    // 此前 CL0 事件層真空(extract 產 0 事件),該缺陷從未曝光。
                     if let Some(link) = facts
                         .links
                         .iter()
                         .find(|l| l.src_binding == b && l.span == ev.span)
                     {
-                        let mut end = facts.bindings[b].scope.end;
+                        let mut end = link.span.end;
                         for other in &facts.events {
                             if other.binding == link.ref_binding
                                 && other.span.start >= link.span.start

@@ -1,0 +1,350 @@
+{
+  "cases": {
+    "accept_assign_then_borrow.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_borrow_dead_before_branch_write.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_borrow_in_while_cond_dies.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_borrow_then_borrow_param.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_branch_both_read.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_clean.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_deref_then_write.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_empty_fn.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_inner_block_borrow_dies.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_loop_write_no_borrow.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_mut_borrow_sequential_reborrow.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_mut_deref_incr.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_mut_param_write.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_nested_seq_scopes.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_nll_last_use.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_probe_borrow_cond_then_write.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_probe_call_sh_then_write.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_probe_copy_call_under_sh.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_return_copy_value.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_sequential_borrows.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_sh_overlap_reads.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_shadowing_borrow.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_struct_decl_only.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_while_reads.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "e0382_use_after_move_ref.rs": {
+      "codes": [
+        "E0382"
+      ],
+      "expect": "e0382",
+      "pass": true,
+      "spans": [
+        [
+          68,
+          74
+        ]
+      ]
+    },
+    "e0384_assign_immutable.rs": {
+      "codes": [
+        "E0384"
+      ],
+      "expect": "e0384",
+      "pass": true,
+      "spans": [
+        [
+          28,
+          33
+        ]
+      ]
+    },
+    "e0499_double_mut.rs": {
+      "codes": [
+        "E0499"
+      ],
+      "expect": "e0499",
+      "pass": true,
+      "spans": [
+        [
+          93,
+          99
+        ]
+      ]
+    },
+    "e0499_double_mut_nested_block.rs": {
+      "codes": [
+        "E0499"
+      ],
+      "expect": "e0499",
+      "pass": true,
+      "spans": [
+        [
+          71,
+          77
+        ]
+      ]
+    },
+    "e0499_double_mut_two_lets.rs": {
+      "codes": [
+        "E0499"
+      ],
+      "expect": "e0499",
+      "pass": true,
+      "spans": [
+        [
+          61,
+          67
+        ]
+      ]
+    },
+    "e0502_call_mut_while_sh.rs": {
+      "codes": [
+        "E0502"
+      ],
+      "expect": "e0502",
+      "pass": true,
+      "spans": [
+        [
+          85,
+          91
+        ]
+      ]
+    },
+    "e0502_sh_call_conflict_in_loop.rs": {
+      "codes": [
+        "E0502"
+      ],
+      "expect": "e0502",
+      "pass": true,
+      "spans": [
+        [
+          112,
+          118
+        ]
+      ]
+    },
+    "e0502_sh_while_mut_alive.rs": {
+      "codes": [
+        "E0502"
+      ],
+      "expect": "e0502",
+      "pass": true,
+      "spans": [
+        [
+          60,
+          62
+        ]
+      ]
+    },
+    "e0503_read_while_mut_alive.rs": {
+      "codes": [
+        "E0503"
+      ],
+      "expect": "e0503",
+      "pass": true,
+      "spans": [
+        [
+          60,
+          61
+        ]
+      ]
+    },
+    "e0505_move_ref_while_borrowed.rs": {
+      "codes": [
+        "E0505",
+        "E0507"
+      ],
+      "expect": "e0505",
+      "pass": true,
+      "spans": [
+        [
+          77,
+          78
+        ],
+        [
+          92,
+          94
+        ]
+      ]
+    },
+    "e0506_assign_in_while_under_mut.rs": {
+      "codes": [
+        "E0506"
+      ],
+      "expect": "e0506",
+      "pass": true,
+      "spans": [
+        [
+          75,
+          80
+        ]
+      ]
+    },
+    "e0506_assign_while_mut_alive.rs": {
+      "codes": [
+        "E0506"
+      ],
+      "expect": "e0506",
+      "pass": true,
+      "spans": [
+        [
+          52,
+          57
+        ]
+      ]
+    },
+    "e0506_assign_while_sh.rs": {
+      "codes": [
+        "E0506"
+      ],
+      "expect": "e0506",
+      "pass": true,
+      "spans": [
+        [
+          48,
+          53
+        ]
+      ]
+    },
+    "e0597_scope_escape_borrow.rs": {
+      "codes": [
+        "E0597"
+      ],
+      "expect": "e0597",
+      "pass": true,
+      "spans": [
+        [
+          57,
+          59
+        ]
+      ]
+    },
+    "uncoded_syntax_error.rs": {
+      "codes": [
+        "uncoded"
+      ],
+      "expect": "uncoded",
+      "pass": true,
+      "spans": [
+        [
+          25,
+          25
+        ]
+      ]
+    }
+  },
+  "generated_by": "tools/oracle_gate.py --update",
+  "rustc_version": "rustc 1.98.1 (48a229cea 2026-09-01)"
+}

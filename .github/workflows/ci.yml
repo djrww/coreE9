@@ -36,8 +36,9 @@ jobs:
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 
   rocq:
-    name: rocq gate(Phase 0–3:mirror + WCRUtil + Newman + 對帳)
+    name: rocq gate(⏸ 凍結 2026-09-06:資產保留,判決不變;見 docs/PIVOT-RUSTC-ORACLE.md §七)
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -111,3 +112,27 @@ jobs:
           name: hotpaths-bench-log
           path: target/bench.log
           if-no-files-found: ignore
+
+  # P4-0(PIVOT-RUSTC-ORACLE §四):Tier-A oracle 門檻 —— stable rustc 即可,
+  # 零 rustc_private/nightly 依賴;門檻 = 外律 O 系 + 語料對帳(BUG 候選 0
+  # + 兩趟全等 + 基線判決不漂移)+ P4-1 parity(分歧 = 註冊表,lexical 下界定律)。
+  oracle:
+    name: oracle gate(P4-0/P4-1:rustc 判決對帳 + 三軌 parity)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: clippy with oracle feature (deny warnings)
+        run: cargo clippy --all-targets --features oracle -- -D warnings
+
+      - name: 外律 O 系測試(oracle 腳手架自證 + P4-1 parity 主律)
+        run: cargo test --features oracle --test oracle_laws
+
+      - name: oracle gate(curated 語料 × 兩趟全等 × 基線對帳 × parity 註冊表)
+        run: python3 tools/oracle_gate.py corpus/curated corpus/BASELINE.json --parity

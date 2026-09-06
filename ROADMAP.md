@@ -69,10 +69,50 @@
 第一迭代 ✅(110b1ff):P0 #1 #2 + P1 #5 #8   → 補平誠實缺口,CI 固化成紀律
 第二迭代 ✅(0950906):P0 #3 #4 + P1 #6 #7   → 反例最小化 + 規模擴張 + 門檻
 第三迭代 ✅(b904921):P3 #12 Phase 0–2   → 鏡像 + 抽象 Newman + 具體 SN + 對帳框架
-第四迭代(進行中):P3 #12 Phase 3(R3 WCR)→ 前測完成(docs/R3-RESEARCH.md)
-                  + Rocq 輔助層 WCRUtil.v 入庫 + 原捷徑否證(docs/ROCQ-TRACE.md);
-                  併入 #4/#5 兩項工程修復(CI 環境可重建 + 門檻可信度)
+第四迭代 ⏸(2026-09-06 凍結):P3 #12 Phase 3(R3 WCR)→ 前測/Rocq 輔助層/外部
+                  交叉驗證已入庫;因「窮舉≠定理」一般性缺口 + 鏡像維護成本,
+                  主線樞紐至 P4(見 §五;資產保留,rocq job 轉 continue-on-error)
+第五迭代 ✅(2026-09-06):P4-0 oracle 腳手架 → Tier-A 判決通道(CliOracle,
+                  feature 隔離、零新依賴)+ 外律 O 系 ×5 + 種子語料 8/8
+                  + oracle_gate(兩趟全等/基線對帳;判別力演練 ×4 情境全紅)
+第六迭代 ✅(2026-09-06):P4-1 語義接線 + parity → `src/model.rs`
+                  (extract_r0:R₀ 樹→事實層→三軌紅邊)+ 語料 8→39(碼由
+                  rustc bootstrap 實測命名)+ PARITY-REGISTRY(24 分歧/7 家族
+                  全歸檔)+ 主律 oracle_parity_borrow_matrix(含幾何保守下界
+                  定律:借用衝突類碼 ⇒ Lexical 零漏報,9/9);
+                  **三大發現**(ORACLE-TRACE §一):CL0 語義面事件真空 /
+                  借鏈死代碼 / Referent 終點下限錯
+第六迭代b ✅(2026-09-06):P4-1a CL0 事件真空修復 → ast.rs 同構修復
+                  (decl_site + 遍行期作用域 + 借用事件/借鏈 span)+ 兩具名測試
+                  補反真空斷言(實測校準);47/47 綠,T2 首食真數據,parity 不變
 按需            :P2 #9 #10                → 增量編輯器 demo / LSP,對外可用
 ```
 
 **原則**:每一步都以「新增/強化某條具名測試」為完成標準 —— 律不過,碼不合。
+
+---
+
+## 五、路線樞紐(2026-09-06):P3 #12 ⏸ 凍結 → 新主線 P4(rustc 為權威指標)
+
+> 完整藍圖與文獻坐標見 **`docs/PIVOT-RUSTC-ORACLE.md`**;對帳表見
+> **`docs/ORACLE-TRACE.md`**。本節只留決策摘要。
+
+**為何樞紐**:R3 的一般性缺口(窮舉 ≠ 定理,捷徑已被否證)+ 鏡像漂移的雙語言
+永久稅(HARD-ITEMS #2),使 Rocq 主線的 XL 投入風險與回報不再成正比。反之,
+`rep.rs` 的測度本就寫著 `μ = (|E_red|, |Err_rustc|)` 而 rustc 面「記 0」——
+新主線就是把這個佔位符**激活成每次可實測的機器查詢**。判定權仍不轉移
+(分歧三分法:BUG / MODEL-DIFF / RUSTC-BUG),只是裁判從 Rocq kernel
+(證明權威)換成 rustc 本體(行為權威)。
+
+**凍結不丟棄**:`rocq/`、ROCQ-*.md、Maude/NaTT 外證全部保留;rocq CI job 轉
+`continue-on-error`;回歸條件見 PIVOT §七(差分穩定 CT 語義 + XL 預算時重啟)。
+
+**P4-0 已交付(2026-09-06,實測全綠)**:`src/oracle.rs`(feature = "oracle",
+零新依賴)· `tests/oracle_laws.rs` 外律 O 系 ×5 · `corpus/curated/` 種子 8 案例
+8/8 · `tools/oracle_gate.py` + `corpus/BASELINE.json` · CI `oracle` job ·
+`rust-toolchain.toml`。九律載體一字未動(`cargo test --all` 47 條全綠)。
+
+**P4 後續**(PIVOT §八):P4-1 curated 百例 + `ModelOracle` parity + 版本矩陣 →
+P4-2 生成式差分 → P4-3 語義深化(place 敏感 / CFG killer)→ P4-4 Tier-B
+rustc_driver 解剖 → P4-5 修法 oracle 化(µ 第二分量實測)→ P4-6 真實語料 →
+P4-7 R₀ 擴張 + Tier-C 語法差分。

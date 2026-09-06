@@ -14,6 +14,11 @@
 //!   * `r0`    : R₀ Rust 子集 —— 附錄 B 覆蓋面契約 + 正則詞法 + unsupported 申報
 //!   * `l9newman` : 機械的 Newman 通道(終止 + 局部合流 ⇒ 合流 ⇒ 唯一正規形)
 //!   * `shrink` : 反例最小化(ddmin)—— fuzz 失敗時縮到最小反例,防回歸
+//!   * `oracle` : Tier-A 行為權威(P4 路線)—— 以 rustc 本體為裁判取判決
+//!     `Accept | Reject{code, span}`(feature = "oracle",零新依賴;
+//!     docs/PIVOT-RUSTC-ORACLE.md)
+//!   * `model` : 受驗對象(P4-1)—— R₀ 樹 → 事實層 → 三軌紅邊判決,
+//!     與 oracle 判決做 accept/reject 層 parity(feature = "oracle")
 
 #![warn(missing_docs)]
 
@@ -22,6 +27,10 @@ pub mod edit;
 pub mod gen;
 pub mod l9newman;
 pub mod lex;
+#[cfg(feature = "oracle")]
+pub mod model;
+#[cfg(feature = "oracle")]
+pub mod oracle;
 pub mod parse;
 pub mod r0;
 pub mod rep;

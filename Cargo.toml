@@ -21,6 +21,18 @@ path = "src/bin/l9newman.rs"
 name = "fuzz"
 path = "src/bin/fuzz.rs"
 
+# P4-0 Tier-A oracle 跑者(PIVOT-RUSTC-ORACLE §四):只與 oracle feature
+# 同生共死 —— 默認構建零感知,core 發佈面不變。
+[[bin]]
+name = "oracle"
+path = "src/bin/oracle.rs"
+required-features = ["oracle"]
+
+[features]
+# oracle:以 rustc 為行為權威的判決通道(Tier-A,stable 即可,零新依賴)。
+# 默認關閉;啟用:`cargo test --features oracle`(CI 的 oracle job)。
+oracle = []
+
 [[bench]]
 name = "hotpaths"
 harness = false

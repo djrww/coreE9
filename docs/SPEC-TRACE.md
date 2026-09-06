@@ -9,12 +9,17 @@
 
 ## 〇′、Rocq 形式化對照(Phase 0/1,詳見 docs/ROCQ-TRACE.md)
 
+> ⏸ **2026-09-06 路線樞紐**:P3 #12 主線凍結(一般性缺口 + 鏡像維護成本;
+> 決策與回歸條件見 `docs/PIVOT-RUSTC-ORACLE.md` §七)。Phase 0–2 定理與
+> 全部窮舉/外證證據**仍有效**;rocq CI job 轉 `continue-on-error`。
+> 語義/語法層開發主線轉 P4(rustc 為行為權威),對帳表見 `docs/ORACLE-TRACE.md`。
+
 | 定理 | 內容 | 狀態 |
 |---|---|---|
 | R1 | 抽象 Newman:`sn r -> wcr r -> confluent r`(Huet 式,構造) | ✅ 已證 |
 | R4 | `newman_unf`(唯一正規形)+ `exists_normal_form` | ✅ 已證 |
 | R2 | 具體 SN:`sn step_ct`(CommutativeTrim × Guarded,µ=|E_red|)| ✅(Phase 2)|
-| R3 | 具體 WCR(`ct_join_exact` → `wcr step_ct`) | 🔶 Phase 3 開工中:**前測全綠**(精確交換 2,443,506/2,443,506 @ 未過濾 4×6;Guarded≡Raw;紅邊單調)——`docs/R3-RESEARCH.md` |
+| R3 | 具體 WCR(`ct_join_exact` → `wcr step_ct`) | ⏸ 凍結(2026-09-06):前測全綠證據保留(精確交換 2,443,506/2,443,506 @ 未過濾 4×6);「∀ 狀態 WCR」不再宣稱即將閉合 |
 | R5/R6/R7 | L7b 終止 / T2 / 反例存在 | ⬜ Phase 4–6 |
 
 配套:內核鏡像 `rocq/theories/Mirror.v`(D1–D6 決策)+ 對帳框架
@@ -78,6 +83,24 @@
 `lex_lexical_invariants` · `smoke_parse_legal` · `smoke_parse_garbage` ·
 `shrink_finds_exact_minimal` · `shrink_handles_unicode_boundaries` ·
 `shrink_monotone_l7_style` · `shrink_empty_and_trivial`
+
+**外律 O 系(oracle 腳手架自證,5,** `tests/oracle_laws.rs`,feature = "oracle" **;P4-0,2026-09-06)**
+
+| 具名測試 | 對應律(oracle 外延) |
+|---|---|
+| `oracle_smoke_e0502` | 判決抽取(E0502 + 主 span 落涉事行;§1.2 位址語義) |
+| `oracle_accept_clean` | L7a 無假錯誤(乾淨 R₀ 程式 → Accept) |
+| `oracle_reject_uncoded_syntax_error` | L7 全化(任何輸入皆有判決;摘要行結構化排除) |
+| `oracle_determinism` | L2 決定論(兩趟判決全等) |
+| `oracle_expectation_grammar` | 語料約定本身(檔名 → 期望) |
+| `oracle_parity_borrow_matrix` | **P4-1 主律**:rustc × 三軌 parity(39 案例);分歧 = 註冊表精確相等(24/24,BUG 候選 0,stale 0);**幾何保守下界定律**(rustc 借用衝突類碼 ⇒ Lexical 必拒,9/9);blanket(範圍外家族 under 霈屬已申報集合) |
+
+> O 系測的是 **oracle 通道與 parity 引擎本身**;「本模型 vs rustc」的分歧歸檔
+> 見 `docs/ORACLE-TRACE.md` §三 + `corpus/PARITY-REGISTRY.json`(24 項 / 7 家族)。
+> ✅ 2026-09-06 P4-1a:CL0 載體語義面事件真空(ORACLE-TRACE §一 發現 #1)
+> 已修復 —— `ast::extract` 以 decl_site + 遍行期作用域棧正確產事件;
+> `test_law_semantic_facts_consistent` / `test_law_semantic_extract_breadth`
+> 均補**反真空非空斷言**(門檻實測校準),真空復發時必紅。
 
 ---
 

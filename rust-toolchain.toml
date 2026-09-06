@@ -1,0 +1,11 @@
+# P4-0:環境可重建紀律(HARD-ITEMS #4 的教訓延伸到 oracle 面)。
+#
+# Tier-A oracle 只要 stable rustc;此檔只釘 channel(不釘 profile/components):
+#   * components 由各 CI job 按需明確安裝(dtolnay/rust-toolchain 的 with),
+#     避免對未安裝組件的 job(rocq/bench/coverage)產生多餘要求;
+#   * 「權威指標的版本」由 corpus/BASELINE.json 記錄實際 rustc --version
+#     做漂移偵測(tools/oracle_gate.py 的 [warn] 通道);
+#   * 精確釘版 + stable×2 + nightly 版本矩陣是 P4-2+ 的工程項
+#     (PIVOT-RUSTC-ORACLE §四),落地時才收緊此檔。
+[toolchain]
+channel = "stable"

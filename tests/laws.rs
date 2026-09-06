@@ -871,6 +871,12 @@ fn test_law_semantic_facts_consistent() {
     };
     let mut rng = Rng::new(0xA57);
     let mut checked = 0usize;
+    // 反真空計量(P4-1a):事件層曾經整體真空(extract 產 0 事件)而本測試
+    // 空轉通過 —— 此後「事件非空」本身是被斷言的性質(ORACLE-TRACE §一 發現 #1)。
+    let mut legal_with_events = 0usize;
+    let mut legal_samples = 0usize;
+    let mut ev_sum = 0usize;
+    let mut link_sum = 0usize;
     for i in 0..600 {
         let src = match i % 3 {
             0 => gen_legal(&mut rng),
@@ -883,6 +889,14 @@ fn test_law_semantic_facts_consistent() {
         let t = parse(&src).unwrap();
         let facts = extract(&t);
         assert_eq!(facts.has_error_regions, t.has_error());
+        ev_sum += facts.events.len();
+        link_sum += facts.links.len();
+        if i % 3 == 0 {
+            legal_samples += 1;
+            if !facts.events.is_empty() {
+                legal_with_events += 1;
+            }
+        }
         // 標籤面(§3.2 顯示標簽):種類與軌道標籤都必須非空(sexp/報告的基礎)。
         assert!(
             !Track::Lexical.label().is_empty()
@@ -934,6 +948,14 @@ fn test_law_semantic_facts_consistent() {
         checked += 1;
     }
     assert!(checked >= 500, "must exercise the fact layer");
+    // ── 反真空門檻(實測校準 2026-09-06:gen_legal×200 → 119 有事件 / 248 事件 /
+    //    7 鏈;門檻取約六成安全邊際。真空復發時此處必紅。)──
+    assert!(
+        legal_with_events >= 80,
+        "合法生成語料的事件層不許真空:{legal_with_events}/{legal_samples} 有事件"
+    );
+    assert!(ev_sum >= 150, "事件總量異常偏低:{ev_sum}");
+    assert!(link_sum >= 1, "借鏈完全消失(Referent 軌的活性錨點)");
 }
 
 #[test]
@@ -1383,10 +1405,38 @@ fn test_law_semantic_extract_breadth() {
         "fn f() { let x = 1; let y = x; let z = y + x; }",
     ];
     let mut n = 0usize;
+    // 反真空計量(P4-1a):同上 —— 廣度矩陣的事件形態必須真的留下事件。
+    let mut ev_total = 0usize;
+    let mut borrow_events = 0usize;
+    let mut deref_events = 0usize;
+    let mut move_events = 0usize;
+    let mut links_total = 0usize;
     for src in progs {
         let t = parse(src).expect("legal breadth sample");
         let facts = extract(&t);
         assert_eq!(facts.has_error_regions, t.has_error(), "{:?}", src);
+        ev_total += facts.events.len();
+        links_total += facts.links.len();
+        borrow_events += facts
+            .events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.kind,
+                    cl0r0::ast::EvKind::BorrowSh | cl0r0::ast::EvKind::BorrowMut
+                )
+            })
+            .count();
+        deref_events += facts
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, cl0r0::ast::EvKind::Deref))
+            .count();
+        move_events += facts
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, cl0r0::ast::EvKind::Move))
+            .count();
         for track in [Track::Lexical, Track::Nll, Track::Referent] {
             let (ivs, evs) = intervals(&facts, track);
             assert_eq!(ivs.len(), facts.bindings.len());
@@ -1397,6 +1447,12 @@ fn test_law_semantic_extract_breadth() {
         n += 1;
     }
     assert!(n >= 40, "breadth samples must be exercised, got {}", n);
+    // ── 反真空門檻(廣度矩陣;2026-09-06 實測校準)──
+    assert!(ev_total >= 80, "事件總量異常偏低:{ev_total}");
+    assert!(borrow_events >= 3, "借用事件形態缺席:{borrow_events}");
+    assert!(deref_events >= 2, "解引用事件形態缺席:{deref_events}");
+    assert!(move_events >= 1, "移動事件形態缺席:{move_events}");
+    assert!(links_total >= 3, "借鏈形態缺席:{links_total}");
     // 兼帶:垃圾輸入 → has_error 幀,事實層如實為空/部分(不得 panic)
     let mut rng = Rng::new(0xED);
     for _ in 0..30 {

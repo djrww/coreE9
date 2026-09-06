@@ -33,6 +33,8 @@ if [ "$WITH_ROCQ" = 1 ]; then
 fi
 
 # ── Rust(工具鏈可能在快照後消失)───────────────────────────────────────
+# P4 註(2026-09-06):Tier-A oracle 只要 stable rustc,本節已覆蓋;
+# Tier-B(rustc_driver/nightly)按 PIVOT-RUSTC-ORACLE §四 永不自動安裝。
 if ! command -v cargo >/dev/null 2>&1; then
   if [ ! -x "$REAL_HOME/.cargo/bin/cargo" ]; then
     echo "== installing rust toolchain (rustup) =="
