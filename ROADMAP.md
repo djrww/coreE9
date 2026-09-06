@@ -92,6 +92,13 @@
 按需            :P2 #9 #10                → 增量編輯器 demo / LSP,對外可用
 ```
 
+第八迭代 ✅(2026-09-07):P4-3 語義深化 → `ast::intervals` 點事件化(Move/Read/
+Deref)+ linked borrow end = 引用最後使用 + call-arg dies_at = 呼叫右括號末 +
+S2 回邊活性(僅引用在迴圈內被用時跨越)+ place 敏感(field 鏈)+ 型別面
+(TypeClass Int/Ref/Unknown;Ref 讀 = Move+consumes → dead-use 紅邊)。
+具名律 O-8/O-9 雙錨;gate 41/41(註冊表 24→4,餘 F-G 範圍外);fuzz 2000 輪
+gate over/under = (0,0)/(0,0)。詳 `docs/ORACLE-TRACE.md` §八。
+
 **原則**:每一步都以「新增/強化某條具名測試」為完成標準 —— 律不過,碼不合。
 
 ---

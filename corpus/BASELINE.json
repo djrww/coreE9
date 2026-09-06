@@ -30,6 +30,12 @@
       "pass": true,
       "spans": []
     },
+    "accept_branches_disjoint.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
     "accept_clean.rs": {
       "codes": [],
       "expect": "accept",
@@ -43,6 +49,12 @@
       "spans": []
     },
     "accept_empty_fn.rs": {
+      "codes": [],
+      "expect": "accept",
+      "pass": true,
+      "spans": []
+    },
+    "accept_field_borrows_disjoint.rs": {
       "codes": [],
       "expect": "accept",
       "pass": true,

@@ -10,14 +10,31 @@
 //!   * Nll     —— 值軌:killer = 後續 Decl / Move(寫);
 //!   * Referent —— 借軌:借用活性由「引用綁定的最後使用」決定(借鏈)。
 //!
-//! 已知模型邊界(如實申報;分歧入 `corpus/PARITY-REGISTRY.json` 附出處):
-//!   1. 無型別面 ⇒ Copy 盲(call-arg ident 一律記 Move;i32 拷貝語義不分辨)— S1 掛號;
-//!   2. let 初始化的移動語義未建模(`let m2 = m;` 記 Read)— S1 掛號;
-//!   3. 作用域逃逸借用(E0597)超出作用域機制 — S2 掛號;
-//!   4. while/if 回邊活性以 source 線性序近似 — S2 掛號;
-//!   5. call-arg 借用(`g(&mut x)`)無 let 綁定 ⇒ 無借鏈,Nll/Referent 對其
-//!      活性保守(至作用域末 / 至下一寫);
-//!   6. 不可變性(E0384)是型別面檢查,非幾何語義 —— 範圍外,如實申報。
+//! 已知模型邊界(如實申報;分歧入 `corpus/PARITY-REGISTRY.json` 附出處;
+//! P4-3 後剩餘):
+//!   1. 作用域逃逸借用(E0597)超出作用域機制 —— 生命週期求解,範圍外;
+//!   2. 不可變性(E0384)是型別面檢查,非幾何語義 —— 範圍外,如實申報;
+//!   3. 字段賦值 `x.a = e` 記為基座的部分寫(place 精確,consumes=false);
+//!      對**共享**借用的字段寫之冲突由「部分寫 × 借用」紅邊覆蓋,但
+//!      place 前綴之外的跨字段活性不細分(過報允許、漏報不允許的紀律下,
+//!      現行近似偏保守,如實申報);
+//!   4. match 的分支控制流(若 R₀ 擴張至 match,見 P4-7)以源碼線性序近似。
+//!
+//! P4-3 已解決(2026-09-07;ORACLE-TRACE §P4-3 記錄實測):
+//!   * S1 place 敏感度:事件攜帶字段路徑,x.f1/x.f2 不相交(Lexical 軌保持
+//!     綁定粒度 = 幾何保守下界);
+//!   * S1 型別面:Copy(int) call-arg/let-init → Read;非 Copy(引用)→
+//!     Move + consumes(use-after-move 死用紅邊);
+//!   * S1 臨時借用區域:call-arg 借用死於呼叫返回(dies_at);
+//!   * S2 回邊活性:let 形式借用,且**引用綁定在迴圈內被使用**(條件逐迭代
+//!     重求值)⇒ 借用活性延伸至迴圈出口;dies_at 臨時借用(呼叫實參)精確限於
+//!     呼叫,不回邊延伸;引用未用/最後使用在迴圈前 ⇒ 不跨迴圈(迴圈內是對
+//!     referent 的直接訪問,不延續本借用);
+//!   * 區間語義:Read/Deref/Decl = 點事件[Nll/Referent];值生命週期(e0382)
+//!     由 dead-use 紅邊承載,不靠區間延伸(否則「讀區間 × 已死借用」虛假衝突);
+//!   * 軌道分工收斂:點寫(Move = 點活性)+ let 形式借用端點 = 引用最後使用
+//!     (兩軌同律)—— 消滅 F-A/F-B/F-C/F-D/F-E/F-F 家族(註冊表 24 → 4);
+//!     fuzz 2000 輪 gate over/under = (0,0)/(0,0)(2026-09-07,rustc 1.98.1)。
 //!
 //! 紀律:ERROR 區域與 Unsupported 節點**不產事實**(與 CL0 `ast::extract`
 //! 同一誠實面);此類案例 parity 標記 out-of-scope,不參與對帳。
@@ -73,6 +90,7 @@ fn collect_decls(
     facts: &mut Facts,
     scopes: &mut Vec<Vec<usize>>,
     decl_site: &mut DeclSite,
+    btypes: &mut std::collections::HashMap<usize, TypeClass>,
 ) {
     match t.node(node).kind {
         R0Kind::FnItem => {
@@ -100,10 +118,11 @@ fn collect_decls(
                         scope: t.node(body).span,
                     });
                     decl_site.insert(c, b);
+                    btypes.insert(b, param_type(t, c));
                     scopes.last_mut().unwrap().push(b);
                 }
             }
-            collect_decls(t, body, facts, scopes, decl_site);
+            collect_decls(t, body, facts, scopes, decl_site, btypes);
             scopes.pop();
         }
         R0Kind::Block => {
@@ -131,10 +150,10 @@ fn collect_decls(
                         scopes.last_mut().unwrap().push(b);
                     }
                     R0Kind::IfStmt | R0Kind::WhileStmt | R0Kind::LoopStmt => {
-                        collect_decls(t, c, facts, scopes, decl_site);
+                        collect_decls(t, c, facts, scopes, decl_site, btypes);
                     }
                     R0Kind::ExprStmt | R0Kind::ReturnStmt => {
-                        scan_nested_blocks(t, c, facts, scopes, decl_site);
+                        scan_nested_blocks(t, c, facts, scopes, decl_site, btypes);
                     }
                     _ => {}
                 }
@@ -145,12 +164,12 @@ fn collect_decls(
             for c in t.node(node).children.clone() {
                 let k = t.node(c).kind;
                 if k == R0Kind::Block || k == R0Kind::IfStmt {
-                    collect_decls(t, c, facts, scopes, decl_site);
+                    collect_decls(t, c, facts, scopes, decl_site, btypes);
                 }
             }
         }
         _ => {
-            scan_nested_blocks(t, node, facts, scopes, decl_site);
+            scan_nested_blocks(t, node, facts, scopes, decl_site, btypes);
         }
     }
 }
@@ -162,10 +181,11 @@ fn scan_nested_blocks(
     facts: &mut Facts,
     scopes: &mut Vec<Vec<usize>>,
     decl_site: &mut DeclSite,
+    btypes: &mut std::collections::HashMap<usize, TypeClass>,
 ) {
     for c in t.node(node).children.clone() {
         match t.node(c).kind {
-            R0Kind::Block => collect_decls(t, c, facts, scopes, decl_site),
+            R0Kind::Block => collect_decls(t, c, facts, scopes, decl_site, btypes),
             R0Kind::Expr
             | R0Kind::UnaryExpr
             | R0Kind::LetStmt
@@ -174,7 +194,7 @@ fn scan_nested_blocks(
             | R0Kind::IfStmt
             | R0Kind::WhileStmt
             | R0Kind::LoopStmt => {
-                scan_nested_blocks(t, c, facts, scopes, decl_site);
+                scan_nested_blocks(t, c, facts, scopes, decl_site, btypes);
             }
             _ => {}
         }
@@ -189,8 +209,110 @@ fn scan_nested_blocks(
 enum Ctx {
     /// 普通 valuation:ident → Read。
     Value,
-    /// 呼叫實參位置:單 ident → Move(Copy 盲,模組文檔邊界 1)。
+    /// 呼叫實參位置:單 ident → 型別面決定(S1,P4-3):Copy → Read;
+    /// 非 Copy → Move + consumes。
     CallArg,
+}
+
+/// 型別面分類(S1 型別面,P4-3):R₀ 的型別只有「Copy 值」與「引用」兩類
+/// 語義相關性(未知保守處理:不設 consumes,事件-kind 保守)。
+#[derive(Clone, Copy, PartialEq)]
+enum TypeClass {
+    /// int / i32 / bool 等 Copy 值。
+    Int,
+    /// `&T` / `&mut T`(非 Copy)。
+    Ref,
+    /// 未判定(呼叫結果 / 塊 / 未標註參數)。
+    Unknown,
+}
+
+/// 形參型別面(從 TypeRef 節點):`&T`/`&mut T` → Ref;裸型名 → Int;
+/// 陣列 `[…T]` → Unknown(R₀ 罕見,保守)。
+fn param_type(t: &R0Tree, param: u32) -> TypeClass {
+    let type_ref = t
+        .node(param)
+        .children
+        .iter()
+        .copied()
+        .find(|&c| t.node(c).kind == R0Kind::TypeRef);
+    let Some(tr) = type_ref else {
+        return TypeClass::Unknown;
+    };
+    let kids = nontrivia_children(t, tr);
+    if kids
+        .iter()
+        .any(|&c| matches!(t.node(c).kind, R0Kind::Amp | R0Kind::AmpMut))
+    {
+        TypeClass::Ref
+    } else if kids.iter().any(|&c| t.node(c).kind == R0Kind::LBrack) {
+        TypeClass::Unknown
+    } else {
+        TypeClass::Int
+    }
+}
+
+/// 表達式型別面推斷(S1):字面量 → Int;`&x`/`&mut x` → Ref;`*r` → Int;
+/// 單 ident → 該綁定的型別;呼叫/塊 → Unknown;算術/比較 → Int(R₀ 算術
+/// 只作用於 int 類值 —— 若操作數是引用型,程式本身非合法 Rust,rustc 會拒)。
+fn expr_type(
+    t: &R0Tree,
+    expr: u32,
+    btypes: &std::collections::HashMap<usize, TypeClass>,
+    facts: &Facts,
+    scopes: &[Vec<usize>],
+) -> TypeClass {
+    let kids = nontrivia_children(t, expr);
+    if kids.len() == 1 {
+        match t.node(kids[0]).kind {
+            R0Kind::Number | R0Kind::TrueKw | R0Kind::FalseKw => TypeClass::Int,
+            R0Kind::Ident => {
+                let name = name_of(t, kids[0]);
+                crate::ast::lookup_binding(scopes, facts, &name)
+                    .and_then(|b| btypes.get(&b).copied())
+                    .unwrap_or(TypeClass::Unknown)
+            }
+            R0Kind::UnaryExpr => {
+                let uk = nontrivia_children(t, kids[0]);
+                let op = uk.first().map(|&c| t.node(c).kind);
+                match op {
+                    Some(R0Kind::Amp) | Some(R0Kind::AmpMut) => TypeClass::Ref,
+                    Some(R0Kind::Star) => TypeClass::Int,
+                    _ => TypeClass::Unknown,
+                }
+            }
+            R0Kind::Expr => expr_type(t, kids[0], btypes, facts, scopes),
+            R0Kind::Block => TypeClass::Unknown,
+            _ => TypeClass::Unknown,
+        }
+    } else if kids.len() > 1 {
+        // 呼叫?ident 緊隨 LParen
+        if t.node(kids[0]).kind == R0Kind::Ident
+            && kids
+                .get(1)
+                .is_some_and(|&c| t.node(c).kind == R0Kind::LParen)
+        {
+            TypeClass::Unknown
+        } else {
+            TypeClass::Int
+        }
+    } else {
+        TypeClass::Unknown
+    }
+}
+
+/// 字段鏈偵測:從 `kids[i]`(基座 ident)起,`Dot Ident` 對的序列 → place 路徑。
+/// (不消費游標;主迴圈的既有 Dot/field-ident 跳躍邏輯不變。)
+fn field_chain(t: &R0Tree, kids: &[u32], i: usize) -> Vec<String> {
+    let mut place = Vec::new();
+    let mut j = i + 1;
+    while j + 1 < kids.len()
+        && t.node(kids[j]).kind == R0Kind::Dot
+        && t.node(kids[j + 1]).kind == R0Kind::Ident
+    {
+        place.push(name_of(t, kids[j + 1]));
+        j += 2;
+    }
+    place
 }
 
 struct EventCollector<'a> {
@@ -198,15 +320,34 @@ struct EventCollector<'a> {
     facts: &'a mut Facts,
     scopes: &'a mut Vec<Vec<usize>>,
     decl_site: &'a DeclSite,
+    /// 綁定索引 → 型別面分類(S1 型別面)。
+    btypes: &'a mut std::collections::HashMap<usize, TypeClass>,
 }
 
 impl<'a> EventCollector<'a> {
+    /// 預設事件(無 place / 無 dies_at / 無 consumes)。
     fn emit(&mut self, name: &str, span: Span, kind: EvKind) {
+        self.emit_ext(name, span, kind, Vec::new(), None, false);
+    }
+
+    /// 完整事件(S1:place 路徑 + 臨時借用 dies_at + 型別面 consumes)。
+    fn emit_ext(
+        &mut self,
+        name: &str,
+        span: Span,
+        kind: EvKind,
+        place: Vec<String>,
+        dies_at: Option<u32>,
+        consumes: bool,
+    ) {
         if let Some(b) = crate::ast::lookup_binding(self.scopes, self.facts, name) {
             self.facts.events.push(crate::ast::Event {
                 binding: b,
                 kind,
                 span,
+                place,
+                dies_at,
+                consumes,
             });
         }
     }
@@ -263,7 +404,7 @@ impl<'a> EventCollector<'a> {
             R0Kind::IfStmt | R0Kind::WhileStmt => {
                 for c in self.t.node(node).children.clone() {
                     match self.t.node(c).kind {
-                        R0Kind::Expr => self.walk_expr(c, Ctx::Value),
+                        R0Kind::Expr => self.walk_expr(c, Ctx::Value, None),
                         R0Kind::Block | R0Kind::IfStmt => self.walk_node(c),
                         _ => {}
                     }
@@ -279,7 +420,7 @@ impl<'a> EventCollector<'a> {
             R0Kind::ReturnStmt => {
                 for c in self.t.node(node).children.clone() {
                     if self.t.node(c).kind == R0Kind::Expr {
-                        self.walk_expr(c, Ctx::Value);
+                        self.walk_expr(c, Ctx::Value, None);
                     }
                 }
             }
@@ -307,6 +448,9 @@ impl<'a> EventCollector<'a> {
             binding: b,
             kind: EvKind::Decl,
             span,
+            place: Vec::new(),
+            dies_at: None,
+            consumes: false,
         });
         // init:Eq 之後的 Expr 子節點
         let eq_pos = kids.iter().position(|&c| self.t.node(c).kind == R0Kind::Eq);
@@ -316,10 +460,12 @@ impl<'a> EventCollector<'a> {
                 .copied()
                 .find(|&c| self.t.node(c).kind == R0Kind::Expr)
         });
+        let mut bind_type = TypeClass::Unknown;
         if let Some(init) = init {
-            if let Some((src, kind, src_span)) = expr_borrow_shape(self.t, init) {
-                // 借鏈:`let r = &x;` —— Referent 軌的活性錨點
-                self.emit(&src, src_span, kind);
+            if let Some((src, kind, src_span, place)) = expr_borrow_shape(self.t, init) {
+                // 借鏈:`let r = &x;` / `let r = &mut x.a;` —— Referent 軌的活性錨點
+                // (place 隨借用事件:S1,`&mut x.a` 與 `&mut x.b` 不相交)
+                self.emit_ext(&src, src_span, kind, place, None, false);
                 if let Some(sb) = crate::ast::lookup_binding(self.scopes, self.facts, &src) {
                     self.facts.links.push(BorrowLink {
                         ref_binding: b,
@@ -332,56 +478,113 @@ impl<'a> EventCollector<'a> {
                         span: src_span,
                     });
                 }
+                bind_type = TypeClass::Ref;
+            } else if init_is_single_ident(self.t, init) {
+                // S1 型別面(F-F):let-init 單 ident = 值拷貝或所有權轉移。
+                // `let m2 = m;`(m: &mut)→ Move + consumes ⇒ m 死;
+                // `let y = x;`(x: int)→ Read。
+                let nid2 = nontrivia_children(self.t, init)[0];
+                let name = name_of(self.t, nid2);
+                let sp = self.t.node(nid2).span;
+                let ty = expr_type(self.t, init, self.btypes, self.facts, self.scopes);
+                match ty {
+                    TypeClass::Ref => {
+                        self.emit_ext(&name, sp, EvKind::Move, Vec::new(), None, true)
+                    }
+                    TypeClass::Int => self.emit(&name, sp, EvKind::Read),
+                    TypeClass::Unknown => {
+                        self.emit_ext(&name, sp, EvKind::Move, Vec::new(), None, false)
+                    }
+                }
             } else {
-                self.walk_expr(init, Ctx::Value);
+                self.walk_expr(init, Ctx::Value, None);
+                bind_type = expr_type(self.t, init, self.btypes, self.facts, self.scopes);
             }
         }
+        // 型別面記錄(供後續 `let m2 = m` / 實參 / 賦值的 consumes 判定)
+        self.btypes.insert(b, bind_type);
         // 遮蔽語義(與 Rust 一致):RHS 先行 —— `let x = x + 1;` 的 x 指外層;
         // 走完 init 才把新綁定註冊進作用域。
         self.scopes.last_mut().unwrap().push(b);
     }
 
-    /// 語句級表達式:賦值(`x = e` / `*p = e`)與一般表達式。
+    /// 語句級表達式:賦值(`x = e` / `x.a = e` / `*p = e`)與一般表達式。
     fn walk_stmt_expr(&mut self, node: u32) {
         let kids = nontrivia_children(self.t, node);
         if let Some(eq) = kids.iter().position(|&c| self.t.node(c).kind == R0Kind::Eq) {
             let lhs = &kids[..eq];
-            // LHS 分類:單 ident → 寫(Move 語義);`*p` → 寫穿(Deref)。
+            // LHS 分類(S1):單 ident → 寫(型別面:非 Copy 引用 ⇒ consumes);
+            // 字段鏈 `x.a = …` → 寫基座的 place(部分寫不移動整體,consumes=false);
+            // `*p` → 寫穿(Deref)。
             if lhs.len() == 1 && self.t.node(lhs[0]).kind == R0Kind::Ident {
                 let name = name_of(self.t, lhs[0]);
                 let sp = self.t.node(lhs[0]).span;
-                self.emit(&name, sp, EvKind::Move);
+                let consumes = self.binding_type(&name) == Some(TypeClass::Ref);
+                self.emit_ext(&name, sp, EvKind::Move, Vec::new(), None, consumes);
+            } else if lhs.len() >= 3
+                && lhs
+                    .iter()
+                    .step_by(2)
+                    .all(|&c| self.t.node(c).kind == R0Kind::Ident)
+                && lhs
+                    .iter()
+                    .skip(1)
+                    .step_by(2)
+                    .all(|&c| self.t.node(c).kind == R0Kind::Dot)
+            {
+                let base = lhs[0];
+                let name = name_of(self.t, base);
+                let sp = self.t.node(base).span;
+                let place = field_chain(self.t, lhs, 0);
+                self.emit_ext(&name, sp, EvKind::Move, place, None, false);
             } else if lhs.len() == 1 && self.t.node(lhs[0]).kind == R0Kind::UnaryExpr {
-                self.walk_unary(lhs[0]); // `*p = …`:p 上記 Deref(寫穿)
+                self.walk_unary(lhs[0], None); // `*p = …`:p 上記 Deref(寫穿)
             } else {
-                self.walk_flat(lhs, Ctx::Value);
+                self.walk_flat(lhs, Ctx::Value, None);
             }
-            self.walk_flat(&kids[eq + 1..], Ctx::Value);
+            self.walk_flat(&kids[eq + 1..], Ctx::Value, None);
         } else {
-            self.walk_flat(&kids, Ctx::Value);
+            self.walk_flat(&kids, Ctx::Value, None);
         }
     }
 
-    /// 完整 Expr 節點(呼叫實參 / 括號內容):單 ident 實參記 Move(Copy 盲,邊界 1)。
-    fn walk_expr(&mut self, node: u32, ctx: Ctx) {
+    /// 作用域內綁定的型別面(lookup 失敗 = None)。
+    fn binding_type(&self, name: &str) -> Option<TypeClass> {
+        let b = crate::ast::lookup_binding(self.scopes, self.facts, name)?;
+        self.btypes.get(&b).copied()
+    }
+
+    /// 完整 Expr 節點(呼叫實參 / 括號內容):單 ident 實參按型別面
+    /// (S1,F-C):Copy(int)→ Read;非 Copy(引用)→ Move + consumes;
+    /// 未知 → Move(保守,不設 consumes)。
+    fn walk_expr(&mut self, node: u32, ctx: Ctx, dies_at: Option<u32>) {
         let kids = nontrivia_children(self.t, node);
         if ctx == Ctx::CallArg && kids.len() == 1 && self.t.node(kids[0]).kind == R0Kind::Ident {
             let name = name_of(self.t, kids[0]);
             let sp = self.t.node(kids[0]).span;
-            self.emit(&name, sp, EvKind::Move);
+            match self.binding_type(&name) {
+                Some(TypeClass::Int) => self.emit(&name, sp, EvKind::Read),
+                Some(TypeClass::Ref) => {
+                    self.emit_ext(&name, sp, EvKind::Move, Vec::new(), None, true)
+                }
+                _ => self.emit_ext(&name, sp, EvKind::Move, Vec::new(), None, false),
+            }
             return;
         }
-        self.walk_flat(&kids, Ctx::Value);
+        // `g(&mut x)`:實參是 Expr[UnaryExpr[…]] —— dies_at 貫穿至借用事件
+        //(S1 臨時借用區域)。
+        self.walk_flat(&kids, Ctx::Value, dies_at);
     }
 
     /// 扁平子節點序列的分類器:呼叫 / 字段 / 借用 / 解引用 / 讀。
-    fn walk_flat(&mut self, kids: &[u32], ctx: Ctx) {
+    /// `dies_at`:call-arg 借用死點(僅經 `g(&mut x)` 路徑貫穿;其餘位置 None)。
+    fn walk_flat(&mut self, kids: &[u32], ctx: Ctx, dies_at: Option<u32>) {
         let mut i = 0;
         while i < kids.len() {
             let c = kids[i];
             match self.t.node(c).kind {
                 R0Kind::UnaryExpr => {
-                    self.walk_unary(c);
+                    self.walk_unary(c, dies_at);
                     i += 1;
                 }
                 R0Kind::Ident => {
@@ -403,12 +606,15 @@ impl<'a> EventCollector<'a> {
                             }
                             j += 1;
                         }
-                        // (i+1..j) 內的 Expr 子節點 = 實參;ident 為 callee 不計
+                        // (i+1..j) 內的 Expr 子節點 = 實參;ident 為 callee 不計。
+                        // S1 臨時借用區域:F-B —— call-arg 借用死於呼叫返回
+                        // (RParen 的 span.end),不再保守至作用域末。
+                        let call_end = self.t.node(kids[j.min(kids.len())]).span.end;
                         for k in kids[i + 1..j.min(kids.len())].iter().copied() {
                             if self.t.node(k).kind == R0Kind::Expr {
-                                self.walk_expr(k, Ctx::CallArg);
+                                self.walk_expr(k, Ctx::CallArg, Some(call_end));
                             } else if self.t.node(k).kind == R0Kind::UnaryExpr {
-                                self.walk_unary(k); // `g(&mut x)`
+                                self.walk_unary(k, Some(call_end)); // `g(&mut x)`
                             }
                         }
                         i = j + 1;
@@ -420,17 +626,20 @@ impl<'a> EventCollector<'a> {
                         i += 1;
                         continue;
                     }
+                    // S1 place 敏感度:字段訪問基座 `x.f1` 的使用 = place [f1]
+                    //(x.f1 與 x.f2 不相交;與整體 x 相交)。
+                    let place = field_chain(self.t, kids, i);
                     let name = name_of(self.t, c);
                     let sp = self.t.node(c).span;
                     let kind = match ctx {
                         Ctx::CallArg => EvKind::Move,
                         _ => EvKind::Read,
                     };
-                    self.emit(&name, sp, kind);
+                    self.emit_ext(&name, sp, kind, place, None, false);
                     i += 1;
                 }
                 R0Kind::Expr => {
-                    self.walk_expr(c, Ctx::Value); // 括號表達式
+                    self.walk_expr(c, Ctx::Value, None); // 括號表達式
                     i += 1;
                 }
                 R0Kind::Block => {
@@ -455,7 +664,7 @@ impl<'a> EventCollector<'a> {
                         j += 1;
                     }
                     let inner: Vec<u32> = kids[i + 1..j.min(kids.len())].to_vec();
-                    self.walk_flat(&inner, Ctx::Value);
+                    self.walk_flat(&inner, Ctx::Value, None);
                     i = j + 1;
                 }
                 _ => {
@@ -465,8 +674,9 @@ impl<'a> EventCollector<'a> {
         }
     }
 
-    /// 一元前綴:`&x` / `&mut x`(借用)/ `*p`(解引用)/ `!e`(透傳)。
-    fn walk_unary(&mut self, node: u32) {
+    /// 一元前綴:`&x` / `&mut x`(借用;place 可含字段鏈)/ `*p`(解引用)/ `!e`(透傳)。
+    /// `dies_at`:呼叫實參位置的借用死於呼叫返回(S1 臨時借用區域);其餘位置 None。
+    fn walk_unary(&mut self, node: u32, dies_at: Option<u32>) {
         let kids = nontrivia_children(self.t, node);
         let op = kids.first().map(|&c| self.t.node(c).kind);
         let inner = kids.iter().copied().find(|&c| {
@@ -479,6 +689,9 @@ impl<'a> EventCollector<'a> {
             (Some(R0Kind::Amp | R0Kind::AmpMut), Some(inner))
                 if self.t.node(inner).kind == R0Kind::Ident =>
             {
+                // place:ident 之後的字段鏈(`&mut x.a` → [a])
+                let pos = kids.iter().position(|&c| c == inner).unwrap();
+                let place = field_chain(self.t, &kids[pos..], 0);
                 let name = name_of(self.t, inner);
                 let sp = self.t.node(inner).span;
                 let kind = if op == Some(R0Kind::AmpMut) {
@@ -486,7 +699,7 @@ impl<'a> EventCollector<'a> {
                 } else {
                     EvKind::BorrowSh
                 };
-                self.emit(&name, sp, kind);
+                self.emit_ext(&name, sp, kind, place, dies_at, false);
             }
             (Some(R0Kind::Star), Some(inner)) if self.t.node(inner).kind == R0Kind::Ident => {
                 let name = name_of(self.t, inner);
@@ -494,8 +707,8 @@ impl<'a> EventCollector<'a> {
                 self.emit(&name, sp, EvKind::Deref);
             }
             (_, Some(inner)) => match self.t.node(inner).kind {
-                R0Kind::Expr => self.walk_expr(inner, Ctx::Value),
-                R0Kind::UnaryExpr => self.walk_unary(inner),
+                R0Kind::Expr => self.walk_expr(inner, Ctx::Value, None),
+                R0Kind::UnaryExpr => self.walk_unary(inner, dies_at),
                 _ => {}
             },
             _ => {}
@@ -503,8 +716,15 @@ impl<'a> EventCollector<'a> {
     }
 }
 
+/// `expr` 是否整體是單個 ident(供 let-init 型別面判定)。
+fn init_is_single_ident(t: &R0Tree, expr: u32) -> bool {
+    let kids = nontrivia_children(t, expr);
+    kids.len() == 1 && t.node(kids[0]).kind == R0Kind::Ident
+}
+
 /// `expr` 是否整體是 `&x` / `&mut x`(借鏈偵測;Expr → UnaryExpr → [Amp, Ident])。
-fn expr_borrow_shape(t: &R0Tree, expr: u32) -> Option<(String, EvKind, Span)> {
+/// 回傳 (源名, 借用種類, 源 span, 字段鏈 place)。
+fn expr_borrow_shape(t: &R0Tree, expr: u32) -> Option<(String, EvKind, Span, Vec<String>)> {
     let kids = nontrivia_children(t, expr);
     if kids.len() != 1 || t.node(kids[0]).kind != R0Kind::UnaryExpr {
         return None;
@@ -520,7 +740,13 @@ fn expr_borrow_shape(t: &R0Tree, expr: u32) -> Option<(String, EvKind, Span)> {
         R0Kind::AmpMut => EvKind::BorrowMut,
         _ => return None,
     };
-    Some((name_of(t, ident), kind, t.node(ident).span))
+    let pos = uk.iter().position(|&c| c == ident)?;
+    Some((
+        name_of(t, ident),
+        kind,
+        t.node(ident).span,
+        field_chain(t, &uk[pos..], 0),
+    ))
 }
 
 /// R₀ 樹 → 事實層(對外入口;兩遍:聲明 → 事件)。
@@ -530,14 +756,16 @@ pub fn extract_r0(t: &R0Tree) -> Facts {
         events: Vec::new(),
         links: Vec::new(),
         has_error_regions: t.has_error(),
+        loops: collect_r0_loop_spans(t),
     };
     let root = t.root();
     let mut scopes: Vec<Vec<usize>> = vec![Vec::new()];
     let mut decl_site: DeclSite = DeclSite::new();
+    let mut btypes: std::collections::HashMap<usize, TypeClass> = std::collections::HashMap::new();
     for c in t.node(root).children.clone() {
         match t.node(c).kind {
             R0Kind::FnItem | R0Kind::StructItem | R0Kind::Error => {
-                collect_decls(t, c, &mut facts, &mut scopes, &mut decl_site);
+                collect_decls(t, c, &mut facts, &mut scopes, &mut decl_site, &mut btypes);
             }
             _ => {}
         }
@@ -549,11 +777,27 @@ pub fn extract_r0(t: &R0Tree) -> Facts {
                 facts: &mut facts,
                 scopes: &mut scopes,
                 decl_site: &decl_site,
+                btypes: &mut btypes,
             };
             e.walk_node(c);
         }
     }
     facts
+}
+
+/// 收集 R₀ 樹的迴圈語句 span(S2 回邊活性):WhileStmt / LoopStmt。
+fn collect_r0_loop_spans(t: &R0Tree) -> Vec<Span> {
+    let mut out = Vec::new();
+    fn rec(t: &R0Tree, id: u32, out: &mut Vec<Span>) {
+        if matches!(t.node(id).kind, R0Kind::WhileStmt | R0Kind::LoopStmt) {
+            out.push(t.node(id).span);
+        }
+        for &c in &t.node(id).children {
+            rec(t, c, out);
+        }
+    }
+    rec(t, t.root(), &mut out);
+    out
 }
 
 // ===========================================================================
@@ -1065,14 +1309,15 @@ mod tests {
         assert!(m.in_scope);
         assert_eq!(m.tracks.len(), 3);
         assert!(m.tracks.iter().all(|t| !t.reject));
-        // E0506 現場:Referent 拒絕(rustc 同拒);Nll 漏報(已註冊分歧)
+        // E0506 現場:Referent 與 Nll 皆拒絕(rustc 同拒)—— P4-3 分工收斂
+        //(let 形式借用端點 = 引用最後使用,兩軌同律;此前 Nll 漏報 = F-D,已消滅)
         let m = model_check(
             "fn f() {\n    let mut x = 5;\n    let r = &x;\n    x = 6;\n    let z = *r;\n}\n",
         );
         assert!(m.in_scope);
         let by = |l: &str| m.tracks.iter().find(|t| t.track == l).unwrap().reject;
         assert!(by("referent"));
-        assert!(!by("nll"));
+        assert!(by("nll"));
     }
 
     #[test]

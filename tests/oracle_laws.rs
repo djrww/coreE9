@@ -312,3 +312,129 @@ fn oracle_fuzz_agreement() {
         rep.n_reject_borrow_expect + rep.n_reject_move_expect
     );
 }
+
+/// O-8(P4-3 主律之一):place 敏感度正交性。
+/// `&mut s.a` 與 `&mut s.b` 作用於**不同 place** ⇒ Nll/Referent 軌不衝突
+/// (雙錨:模型放行 ∧ rustc 接受);同 place(`&mut s.a` ×2)⇒ 必拒
+/// (雙錨:模型拒絕 ∧ rustc 拒絕)。Lexical 軌保持綁定粒度(下界,可過報)。
+#[test]
+fn test_law_semantic_place_orthogonality() {
+    use cl0r0::model::model_check;
+    let o = CliOracle::new();
+
+    // 正交:不同字段
+    let disjoint = "\
+struct S {
+    a: i32,
+    b: i32,
+}
+fn f(s: &mut S) {
+    let p = &mut s.a;
+    let q = &mut s.b;
+    *p = 1;
+    *q = 2;
+}
+";
+    let rep = o.check(disjoint).expect("oracle 應可用");
+    assert!(
+        rep.verdict.is_accept(),
+        "rustc 應接受正交字段借用:{:?}",
+        rep.verdict
+    );
+    let m = model_check(disjoint);
+    assert!(m.in_scope);
+    let by = |l: &str| m.tracks.iter().find(|t| t.track == l).unwrap().reject;
+    assert!(!by("nll"), "Nll 應對正交字段放行");
+    assert!(!by("referent"), "Referent 應對正交字段放行");
+
+    // 對照:同 place(同一字段兩次 &mut)必拒
+    let same = "\
+struct S {
+    a: i32,
+}
+fn f(s: &mut S) {
+    let p = &mut s.a;
+    let q = &mut s.a;
+    *p = 1;
+    *q = 2;
+}
+";
+    let rep = o.check(same).expect("oracle 應可用");
+    assert!(!rep.verdict.is_accept(), "rustc 應拒絕同 place 雙 &mut");
+    let m = model_check(same);
+    assert!(m.in_scope);
+    let by = |l: &str| m.tracks.iter().find(|t| t.track == l).unwrap().reject;
+    assert!(by("nll"), "Nll 必拒同 place 雙 &mut");
+    assert!(by("referent"), "Referent 必拒同 place 雙 &mut");
+}
+
+/// O-9(P4-3 主律之二):CFG 精確 killer(分支不相交 + 迴圈回邊)。
+///   (a) if/else 分支不相交:借用只在 then 用、寫只在 else ⇒ 模型放行 ∧ rustc 接受;
+///   (b) while 回邊:`while *m > 3 { x = 6; }` —— 條件重複求值使借用跨越
+///       source 線性最後使用點 ⇒ 模型必拒 ∧ rustc 拒絕(F-E 家族,已消滅);
+///   (c) 迴圈後才借用:迴圈內寫不影響 ⇒ 模型放行 ∧ rustc 接受。
+#[test]
+fn test_law_semantic_cfg_liveness() {
+    use cl0r0::model::model_check;
+    let o = CliOracle::new();
+
+    // (a) 分支不相交
+    let branches = "\
+fn f() {
+    let mut x = 5;
+    let r = &x;
+    if x > 3 {
+        let u = *r;
+    } else {
+        x = 6;
+    }
+}
+";
+    let rep = o.check(branches).expect("oracle 應可用");
+    assert!(
+        rep.verdict.is_accept(),
+        "rustc 應接受分支不相交:{:?}",
+        rep.verdict
+    );
+    let m = model_check(branches);
+    let by = |l: &str| m.tracks.iter().find(|t| t.track == l).unwrap().reject;
+    assert!(!by("nll") && !by("referent"), "模型應對分支不相交放行");
+
+    // (b) 迴圈回邊(F-E 形状)
+    let backedge = "\
+fn f() {
+    let mut x = 5;
+    let m = &mut x;
+    while *m > 3 {
+        x = 6;
+    }
+}
+";
+    let rep = o.check(backedge).expect("oracle 應可用");
+    assert!(!rep.verdict.is_accept(), "rustc 應拒絕回邊冲突");
+    let m = model_check(backedge);
+    let by = |l: &str| m.tracks.iter().find(|t| t.track == l).unwrap().reject;
+    assert!(by("nll"), "Nll 必拒回邊冲突(S2 回邊活性)");
+    assert!(by("referent"), "Referent 必拒回邊冲突(S2 回邊活性)");
+
+    // (c) 迴圈後借用
+    let after_loop = "\
+fn f() {
+    let mut x = 5;
+    while x > 3 {
+        x = x - 1;
+    }
+    let r = &x;
+    let z = *r;
+}
+";
+    let rep = o.check(after_loop).expect("oracle 應可用");
+    assert!(
+        rep.verdict.is_accept(),
+        "rustc 應接受迴圈後借用:{:?}",
+        rep.verdict
+    );
+    let m = model_check(after_loop);
+    let by = |l: &str| m.tracks.iter().find(|t| t.track == l).unwrap().reject;
+    assert!(!by("nll") && !by("referent"), "模型應對迴圈後借用放行");
+}

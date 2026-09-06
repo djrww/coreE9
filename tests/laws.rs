@@ -944,7 +944,16 @@ fn test_law_semantic_facts_consistent() {
                 let eb = &facts.events[ed.b];
                 assert_eq!(ea.binding, ed.binding);
                 assert_eq!(eb.binding, ed.binding);
-                assert!(cl0r0::ast::conflicts(ea.kind, eb.kind));
+                // 紅邊 = kind 衝突 × 區間重疊,或 use-after-move 死用
+                //(S1 型別面,P4-3:consumes 事件之後的同綁定使用;
+                // 此類紅邊不依賴 kind 相容表,由 consumes 標記機械化)。
+                let is_dead_use = ea.consumes && ea.span.start <= eb.span.start;
+                assert!(
+                    cl0r0::ast::conflicts(ea.kind, eb.kind) || is_dead_use,
+                    "紅邊必為 kind 衝突或 use-after-move: {:?} × {:?}",
+                    ea.kind,
+                    eb.kind
+                );
             }
             verts.sort_unstable();
             verts.dedup();

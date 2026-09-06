@@ -212,9 +212,64 @@ fuzz 每樣本不再多一個子進程;O-4 兩趟全等律不變);③ 失敗縮�
 (P0 #3 防線沿用);④ 探針史:交付前以 3000 輪獨立探針實測 0 失配(探針已清退,
 正式載體 = O-7 + fuzz 併軌)。
 
-## 八、下一步(P4-3 起,見 PIVOT-RUSTC-ORACLE §八)
+## 八、P4-3 語義深化(完成,2026-09-07)
 
-- **P4-3**:S1 place 敏感 + 型別面(Copy/移動)→ 消滅 F-B/F-C/F-F;
-  S2 CFG killer → 消滅 F-E;F-A 隨軌道分工重設計收斂;每消滅一個家族,
-  註冊表對應條目必須轉 stale(這是「修好了」的機器定義)。
-  §七的 gate 軌道 over/under 統計將作為 P4-3 的「前」值對照。
+**動工前對照表(§七 = P4-3 前;P4-3 後 = 同一 seed 0x0F4220260003、
+同一 2000 輪重跑)**:
+
+| 指標 | P4-3 前(§七) | P4-3 後 |
+|---|---|---|
+| curated 案例 | 39 | **41**(+`accept_field_borrows_disjoint` / `accept_branches_disjoint`) |
+| parity 註冊表 | 24 項 / 7 家族 | **4 項 / 1 家族(F-G 範圍外)** |
+| fuzz gate over(nll, referent) | (476, 402) | **(0, 0)** |
+| fuzz gate under(nll, referent) | (593, 410) | **(0, 0)** |
+| fuzz 失配 | 0 | 0 |
+
+**機制(src/ast.rs + src/model.rs,全部實測驗證)**:
+
+1. **S1 place 敏感度**:`Event.place: Vec<String>`(字段鏈);`&s.a` /
+   `&s.b` 不同 place ⇒ Nll/Referent 軌不衝突(rustc 接受,雙錨 O-8);
+   同 place 雙 `&mut` 必拒(雙錨 O-8 對照)。`red_edges` 以 place_compatible
+   過濾(Lexical 軌保持綁定粒度 = 幾何保守下界,如實過報)。
+2. **S1 型別面**:`TypeClass`{Int, Ref, Unknown} + btypes 貫穿:
+   - 單一 ident 讀:Ref ⇒ Move(consumes=true)→ dead-use 紅邊(e0382 機制);
+     Int ⇒ Read;未知 ⇒ Move(false)。
+   - `*p = …` 寫:p 為 Ref ⇒ consumes=true(其後再用 ⇒ e0382 死用邊);
+     `*p = 1; *p = 2;` 雙拒,與 rustc 一致。
+   - 根指派 `x = …`:consumes=(型別 Ref);字段指派 = Move(該 place)。
+3. **S2 回邊活性**:while 條件反覆求值 ⇒ 迴圈前借用跨越迴圈出口
+   (`e0506_assign_in_while_under_mut` 雙軌拒,rustc 拒)。精確化(實測收斂):
+   - dies_at 臨時借用(呼叫實參)**不**回邊延伸 —— 精確限於呼叫;
+   - let 形式借用僅當**引用綁定在迴圈內被使用**時跨越迴圈(未用引用即死;
+     引用最後使用在迴圈前則迴圈內是直接訪問,不延續本借用)。
+4. **區間語義收斂**:Read/Deref/Decl 在 Nll/Referent 軌皆**點事件**
+   [s,s);值生命週期(e0382)改由 dead-use 紅邊承載,不再靠區間延伸
+   —— 否則「讀區間 × 已死借用」虛假衝突(fuzz 實測 over 案例,已修)。
+5. **Move = 點 [s,s)** + **linked borrow end = 引用綁定最後使用**
+   (未用引用 ⇒ 點,NLL「未用借用即死」一致)+ **call-arg 借用 dies_at
+   = 呼叫右括號 span 末**(S1 臨時區域)。
+6. **軌道分工收斂**:E0506 家族由 nll 獨拒 → nll + referent 雙拒
+   (原 F-D 分歧消滅);F-A(過報)隨 dies_at/點寫收斂。
+
+**家族消滅對帳(註冊表 24 → 4)**:F-A 至 F-F 家族共 20 項
+(過報:accept 行 11 項 nll/referent;欠報:e0382/e0502-loop/e0505/
+e0506 共 9 項)全數轉 stale 並移除(gate 機器核實,2026-09-07 實測);
+餘 4 項 = **F-G 範圍外家族**(E0384 不可變性 ×2、E0597 作用域逃逸 ×2)
+—— 如實申報不覆蓋,保留註冊。
+
+**具名律(雙錨:模型 × rustc)**:`test_law_semantic_place_orthogonality`
+(O-8:正交字段放行 ×2 + 同 place 必拒 ×2)、`test_law_semantic_cfg_liveness`
+(O-9:(a) 分支不相交放行、(b) 迴圈回邊雙軌必拒、(c) 迴圈後借用放行)。
+
+**全矩陣(2026-09-07,rustc 1.98.1)**:核心 32 單測 + 32 律(18.9s)+
+O 系 9/9;oracle gate 41/41(parity 分歧 4 = 註冊表精確相等,BUG 0,
+stale 0);clippy 0 警;rustdoc 淨。
+
+## 九、下一步(P4-4 起,見 PIVOT-RUSTC-ORACLE §八)
+
+- **P4-4**:Tier-B MIR borrowck 對照(rustc-private;nightly only);
+  雙軌 vs rustc 區域結論的第三錨;polonius 單獨跑。
+- 剩餘邊界(如實):① 泛型/閉包/生命周期註記仍 out-of-scope 排除;
+  ② 二階引用(`&&T`)型別面未細分(現按 Ref 處理);
+  ③ 迴巢迴圈的回邊延伸只取最外 span(保守,允許過報);
+  ④ F-G 家族(E0384/E0597)持續不覆蓋,註冊表保留。

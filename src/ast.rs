@@ -91,6 +91,17 @@ pub struct Event {
     pub kind: EvKind,
     /// 事件在源碼中的跨度。
     pub span: Span,
+    /// 相對根綁定的字段路徑(S1 place 敏感度,P4-3):空 = 整個綁定;
+    /// `[a]` = `x.a`;`x.a` 與 `x.b` 不相交(不同 place 不衝突),
+    /// `x` 與 `x.a` 相交(整体與部分;前綴即相容)。Lexical 軌忽略本欄
+    /// (保持綁定粒度的幾何保守下界)。
+    pub place: Vec<String>,
+    /// 借用活性死於此點(S1 臨時借用區域,P4-3):call-arg 借用死於呼叫返回;
+    /// `None` = 無此上限(既有語義)。
+    pub dies_at: Option<u32>,
+    /// 所有權轉移(S1 型別面,P4-3):非 Copy 綁定的移動令其後使用為
+    /// use-after-move(E0382 類;`red_edges` 以死用紅邊機械化)。
+    pub consumes: bool,
 }
 
 /// `let r = &x;`(或 `&mut x`)—— 借用鏈:refer 綁定 → 源綁定。
@@ -118,6 +129,10 @@ pub struct Facts {
     pub links: Vec<BorrowLink>,
     /// 樹中是否存在 ERROR 區域(有則 liveness 分析降級為保守)。
     pub has_error_regions: bool,
+    /// 迴圈語句(while/loop)的 span(S2 回邊活性,P4-3):迴圈內使用過的
+    /// 綁定在迴圈內保持活躍 —— 迴圈前的借用事件活性延伸至迴圈出口。
+    /// 空 = 無迴圈(行為與 P4-3 前完全一致)。
+    pub loops: Vec<Span>,
 }
 
 /// 相容性違反表(§3.3):哪些事件對在「活躍區間相交」時構成紅邊。
@@ -142,6 +157,21 @@ pub fn conflicts(k1: EvKind, k2: EvKind) -> bool {
     )
 }
 
+/// 收集迴圈語句的 span(S2 回邊活性;CL0 載體 = WhileStmt)。
+fn collect_loop_spans(t: &Tree) -> Vec<Span> {
+    let mut out = Vec::new();
+    fn rec(t: &Tree, id: u32, out: &mut Vec<Span>) {
+        if matches!(t.node(id).kind, Kind::WhileStmt) {
+            out.push(t.node(id).span);
+        }
+        for &c in &t.node(id).children {
+            rec(t, c, out);
+        }
+    }
+    rec(t, t.root(), &mut out);
+    out
+}
+
 /// 從 CST 抽取事實層(具名節點樹上的結構遞歸;ERROR 區域不產事實,如實申報)。
 pub fn extract(t: &Tree) -> Facts {
     let mut facts = Facts {
@@ -149,6 +179,7 @@ pub fn extract(t: &Tree) -> Facts {
         events: Vec::new(),
         links: Vec::new(),
         has_error_regions: t.has_error(),
+        loops: collect_loop_spans(t),
     };
     let root = t.root();
     let mut scopes: Vec<Vec<usize>> = vec![Vec::new()]; // 作用域棧:每層 block 的綁定
@@ -338,6 +369,10 @@ impl<'a> EventCollector<'a> {
                 binding: b,
                 kind,
                 span,
+                // P4-3 新欄位:CL0 載體暫不填(預設值;R₀ 側 model.rs 填)。
+                place: Vec::new(),
+                dies_at: None,
+                consumes: false,
             });
             true
         } else {
@@ -522,6 +557,10 @@ impl<'a> EventCollector<'a> {
             binding: b,
             kind: EvKind::Decl,
             span,
+            // P4-3 新欄位:CL0 載體暫不填(預設值;R₀ 側 model.rs 填)。
+            place: Vec::new(),
+            dies_at: None,
+            consumes: false,
         });
         if let Some(en) = expr_node {
             if let Some((src, borrow_kind, src_span)) = self.walk_expr_for_borrow(en) {
@@ -601,58 +640,141 @@ impl Interval {
 
 /// 每個綁定在給定軌道下的活躍區間集合(索引與 `facts.events` 同序:
 /// 每事件恰一區間;事件表直接取 `facts.events`,不再克隆)。
-/// Nll 軌:killer = Span 更大的 Decl 與 Move(值被覆蓋 / 移動)。
+///
+/// P4-3 語義深化(三軌分工收斂;詳 docs/ORACLE-TRACE.md §P4-3):
+///   * **點寫**(S1):`Move`(寫/移動)在 Nll/Referent 軌是**點活性**
+///     `[start, start)`——衝突由「他事件區間包含寫點」檢測(借用活性覆蓋
+///     寫點 = 紅邊);寫自身尾部不再過報其後的合法借用(消滅 F-A 過報)。
+///     Lexical 軌保持作用域全長(幾何保守下界不縮)。
+///   * **let 形式借用端點**(S1/S2 分工收斂):有借鏈的借用事件,端點 =
+///     引用綁定的最後使用(兩軌同律)——寫落在借用活性內 = 紅邊(消滅 F-D;
+///     F-A 的「借用無截斷」過報隨之收斂)。
+///   * **臨時借用區域**(S1):無借鏈且有 `dies_at` 的借用(= call-arg
+///     `g(&mut x)`)活性止於呼叫返回(消滅 F-B)。
+///   * **回邊活性**(S2):綁定在迴圈內被使用(自身使用,或借它的引用被使用)
+///     ⇒ 迴圈**前**的借用事件活性延伸至迴圈出口(消滅 F-E)。迴圈內創建的
+///     借用不延伸(每次迭代重新创建,活性止於迭代內最後使用)。
+///   * 無借鏈、無 dies_at 的借用(罕見裸 `&x` 值表達式):保守(下一 killer /
+///     作用域末),與 P4-3 前一致。
 pub fn intervals(facts: &Facts, track: Track) -> Vec<Vec<Interval>> {
     let n = facts.bindings.len();
     let mut out: Vec<Vec<Interval>> = vec![Vec::new(); n];
+    // 回邊活性預計算:loop_live[b] = [(loop.start, loop.end), …] —— b 在該迴圈
+    // 內被使用(b 自身事件,或借自 b 的引用綁定事件;Decl 不計)。
+    let mut loop_live: Vec<Vec<(u32, u32)>> = vec![Vec::new(); n];
+    for &l in &facts.loops {
+        for (b, slot) in loop_live.iter_mut().enumerate() {
+            let direct = facts.events.iter().any(|e| {
+                e.binding == b
+                    && !matches!(e.kind, EvKind::Decl)
+                    && e.span.start >= l.start
+                    && e.span.start < l.end
+            });
+            let via_ref = facts.links.iter().any(|lk| {
+                lk.src_binding == b
+                    && facts.events.iter().any(|e| {
+                        e.binding == lk.ref_binding
+                            && !matches!(e.kind, EvKind::Decl)
+                            && e.span.start >= l.start
+                            && e.span.start < l.end
+                    })
+            });
+            if direct || via_ref {
+                slot.push((l.start, l.end));
+            }
+        }
+    }
     for ev in facts.events.iter() {
         let b = ev.binding;
+        let scope_end = facts.bindings[b].scope.end;
+        let is_borrow = matches!(ev.kind, EvKind::BorrowSh | EvKind::BorrowMut);
+        let link = if is_borrow {
+            facts
+                .links
+                .iter()
+                .find(|l| l.src_binding == b && l.span == ev.span)
+        } else {
+            None
+        };
         let mut it = Interval {
             start: ev.span.start,
-            end: facts.bindings[b].scope.end,
+            end: scope_end,
         };
         match track {
             Track::Lexical => {
+                // 幾何保守下界:綁定活滿整個作用域(place 不細分 —— 只准過報)。
                 it.start = facts.bindings[b].scope.start;
-                it.end = facts.bindings[b].scope.end;
+                it.end = scope_end;
             }
-            Track::Nll => {
-                // 下一個 killer(Decl/Move)的 start —— 借用與讀取不終止值生命週期
-                let mut end = facts.bindings[b].scope.end;
-                for other in &facts.events {
-                    if other.binding == b
-                        && other.span.start > ev.span.start
-                        && matches!(other.kind, EvKind::Decl | EvKind::Move)
-                    {
-                        end = end.min(other.span.start);
-                        break;
-                    }
-                }
-                it.end = end.max(it.start);
-            }
-            Track::Referent => {
-                if matches!(ev.kind, EvKind::BorrowSh | EvKind::BorrowMut) {
-                    // 借用事件:活躍到「被借引用」的最後使用(borrow's liveness)。
-                    // ⚠ 2026-09-06 修正(ORACLE-TRACE 發現 #3):終點初值原為
-                    // `scope.end`,再 `.max(使用點)` —— 只能伸、不能縮,借用活性
-                    // 因而恆延至作用域末(過度保守)。正確語義:最後使用點;
-                    // 無使用 ⇒ 立即死亡(與 NLL「未用借用即死」一致)。
-                    // 此前 CL0 事件層真空(extract 產 0 事件),該缺陷從未曝光。
-                    if let Some(link) = facts
-                        .links
-                        .iter()
-                        .find(|l| l.src_binding == b && l.span == ev.span)
-                    {
-                        let mut end = link.span.end;
+            Track::Nll | Track::Referent => {
+                if ev.kind == EvKind::Move {
+                    // 點寫(上)
+                    it.end = it.start;
+                } else if is_borrow {
+                    // 回邊活性(上):僅對「迴圈前」且**非 dies_at 臨時**的借用 ——
+                    // let 形式(跨迭代反覆解引用)與未定界借用跨越迴圈;
+                    // dies_at 臨時借用精確限於呼叫(迴圈內是用新借用,不延續)。
+                    if let Some(lk) = link {
+                        // let 形式借用:活性 = 引用綁定的最後使用(上);
+                        // 無使用 ⇒ 點(與 NLL「未用借用即死」一致)。
+                        let mut end = it.start;
                         for other in &facts.events {
-                            if other.binding == link.ref_binding
-                                && other.span.start >= link.span.start
+                            if other.binding == lk.ref_binding && other.span.start >= ev.span.start
                             {
                                 end = end.max(other.span.end);
                             }
                         }
+                        it.end = end;
+                        // 回邊活性:僅當引用綁定在**迴圈內**被使用(條件逐迭代重求值)
+                        //時跨越迴圈。未用引用即死(點);引用最後使用在迴圈前則不跨
+                        //迴圈 —— 迴圈內是用對 referent 的直接訪問,不延續本借用。
+                        for l in &facts.loops {
+                            let (ls, le) = (l.start, l.end);
+                            if ev.span.start < ls
+                                && facts.events.iter().any(|e| {
+                                    e.binding == lk.ref_binding
+                                        && !matches!(e.kind, EvKind::Decl)
+                                        && e.span.start >= ls
+                                        && e.span.start < le
+                                })
+                            {
+                                it.end = it.end.max(le);
+                            }
+                        }
+                    } else if let Some(d) = ev.dies_at {
+                        // 臨時借用區域(上);精確界,不回邊延伸。
+                        it.end = d.min(scope_end).max(it.start);
+                    } else if track == Track::Nll {
+                        // 保守(上):下一 killer(Decl/Move)或作用域末
+                        let mut end = scope_end;
+                        for other in &facts.events {
+                            if other.binding == b
+                                && other.span.start > ev.span.start
+                                && matches!(other.kind, EvKind::Decl | EvKind::Move)
+                            {
+                                end = end.min(other.span.start);
+                                break;
+                            }
+                        }
                         it.end = end.max(it.start);
+                        for &(ls, le) in &loop_live[b] {
+                            if ev.span.start < ls {
+                                it.end = it.end.max(le);
+                            }
+                        }
+                    } else {
+                        it.end = scope_end;
+                        for &(ls, le) in &loop_live[b] {
+                            if ev.span.start < ls {
+                                it.end = it.end.max(le);
+                            }
+                        }
                     }
+                } else {
+                    // Read/Deref/Decl:點事件(P4-3)。值生命週期由 dead-use 紅邊
+                    //(Move consumes → 其後讀)承載,不再靠區間延伸 —— 否則
+                    //「讀區間 × 已死借用」虛假衝突(fuzz 實測 over 案例)。
+                    it.end = it.start;
                 }
             }
         }
@@ -675,22 +797,38 @@ pub struct RedEdge {
     pub span: Span,
 }
 
+/// 兩個 place 路徑是否相交(相容):相等、或其一為另一的前綴
+/// (`x` ⊃ `x.a`;`x.a` ∩ `x.b` = ∅)。整體訪問與部分訪問相交。
+pub fn place_compatible(a: &[String], b: &[String]) -> bool {
+    a == b || a.starts_with(b) || b.starts_with(a)
+}
+
 /// 計算給定軌道下的紅邊集合(衝突圖;空圖 ⇒ 幾何收斂 §3.5)。
+///
+/// P4-3 增補:
+///   * **place 相容過濾**(S1,Nll/Referent 軌):同綁定但不同 place
+///     (`x.a` vs `x.b`)的事件不衝突;Lexical 軌不過滤(下界保持綁定粒度)。
+///   * **use-after-move 死用紅邊**(S1 型別面):`consumes` 事件(非 Copy
+///     所有權轉移)之後同綁定的任何使用 = 紅邊(不區分軌道;E0382/E0505 類)。
 pub fn red_edges(facts: &Facts, track: Track) -> Vec<RedEdge> {
     let ivs = intervals(facts, track);
     let events = &facts.events;
+    let place_filter = track != Track::Lexical;
     let mut out = Vec::new();
     for (b, _) in facts.bindings.iter().enumerate() {
         let mut evs: Vec<usize> = (0..events.len())
             .filter(|&i| events[i].binding == b)
             .collect();
-        evs.sort_by_key(|&i| events[i].span.start);
+        evs.sort_by_key(|&i| (events[i].span.start, events[i].span.end));
         for x in 0..evs.len() {
             for y in (x + 1)..evs.len() {
                 let i = evs[x];
                 let j = evs[y];
                 let (ei, ej) = (&events[i], &events[j]);
                 if !conflicts(ei.kind, ej.kind) {
+                    continue;
+                }
+                if place_filter && !place_compatible(&ei.place, &ej.place) {
                     continue;
                 }
                 if ivs[b][x].overlaps(&ivs[b][y]) {
@@ -704,6 +842,24 @@ pub fn red_edges(facts: &Facts, track: Track) -> Vec<RedEdge> {
                         ),
                     });
                 }
+            }
+        }
+        // use-after-move 死用紅邊(上):consumes 之後的同綁定使用
+        for x in 0..evs.len() {
+            if !events[evs[x]].consumes {
+                continue;
+            }
+            for y in (x + 1)..evs.len() {
+                let (i, j) = (evs[x], evs[y]);
+                if out.iter().any(|e| e.a == i && e.b == j) {
+                    continue;
+                }
+                out.push(RedEdge {
+                    a: i,
+                    b: j,
+                    binding: b,
+                    span: events[j].span,
+                });
             }
         }
     }
@@ -726,23 +882,51 @@ pub fn conflict_graph_shape(facts: &Facts, track: Track) -> (usize, usize) {
 // ===========================================================================
 
 /// 掃描線求最大團 ω(O(n log n)):排序端點,掃描重疊計數。
+///
+/// 點區間 `[p, p)`(S1 點寫,P4-3)的處理:它只與「嚴格包含 p」的區間
+/// (a < p < b)重疊,不與起/止於 p 的區間重疊(半開嚴定義)。掃描順序:
+/// 同一位置 **End → Point → Start** —— 點只與當前活躍集計數,不與
+/// 同位置開始的區間計數。
 pub fn max_clique(intervals: &[Interval]) -> usize {
-    let mut ends: Vec<(u32, bool)> = Vec::new();
-    for it in intervals {
-        ends.push((it.start, false)); // 開始
-        ends.push((it.end, true)); // 結束(半開:先結束後開始,不重疊)
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    enum K {
+        End,
+        Point,
+        Start,
     }
-    // 半開區間:同一位置先結束、後開始(相接不算重疊)
-    ends.sort_by_key(|&(p, is_end)| (p, !is_end));
+    let mut events: Vec<(u32, K)> = Vec::new();
+    for it in intervals {
+        if it.start == it.end {
+            events.push((it.start, K::Point)); // 點區間:單事件
+        } else {
+            events.push((it.start, K::Start)); // 開始
+            events.push((it.end, K::End)); // 結束(半開:先結束後開始,不重疊)
+        }
+    }
+    events.sort();
     let mut cur = 0usize;
     let mut best = 0usize;
-    for &(_, is_end) in &ends {
-        if is_end {
+    let mut i = 0usize;
+    while i < events.len() {
+        let p = events[i].0;
+        while i < events.len() && events[i] == (p, K::End) {
             cur -= 1;
-        } else {
-            cur += 1;
-            best = best.max(cur);
+            i += 1;
         }
+        let mut n_points = 0usize;
+        while i < events.len() && events[i] == (p, K::Point) {
+            n_points += 1;
+            i += 1;
+        }
+        if n_points > 0 {
+            // 點與當前活躍集重疊(同位置的點互相不重疊)
+            best = best.max(cur + 1);
+        }
+        while i < events.len() && events[i] == (p, K::Start) {
+            cur += 1;
+            i += 1;
+        }
+        best = best.max(cur);
     }
     best
 }

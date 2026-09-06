@@ -173,7 +173,7 @@ tools/oracle_gate.py      // 類比 bench_gate:門檻 + 基線 + --update 重刷
 | **P4-0** oracle 腳手架 | `trait Oracle` + `CliOracle`(JSON 解析)+ rust-toolchain 釘版 + CI `oracle` job + `tools/oracle_gate.py` 骨架 | S | ✅ **已交付(2026-09-06,實測全綠)**:`oracle_smoke_e0502`、`oracle_determinism` + 追加 `oracle_accept_clean`/`oracle_reject_uncoded_syntax_error`/`oracle_expectation_grammar`(外律 O 系 ×5);種子語料 8/8;gate 判別力演練 ×4 情境全紅(`docs/ORACLE-TRACE.md`)|
 | **P4-1** curated 語料 v1 + `ModelOracle` parity | ~100 案例:手寫 + rustc `tests/ui/borrowck` 精選改寫(合 R₀ 者照收);覆蓋 E0382/E0499/E0502/E0503/E0505/E0506/E0507/E0597;`docs/ORACLE-TRACE.md` 開表;分歧三分法入工具 | M | ✅ **已交付(2026-09-06,實測全綠)**:語料 39 案例(24a/14r/1u,碼由 rustc bootstrap 實測命名);`src/model.rs`(extract_r0 + 三軌判決 + parity 引擎);`oracle_parity_borrow_matrix`(BUG 類 0;MODEL-DIFF 24 項/7 家族 100% 歸檔附出處;**幾何保守下界定律**:借用衝突類碼 ⇒ Lexical 零漏報 9/9);附帶三大發現(CL0 事件真空/借鏈死代碼/Referent 終點 bug,見 ORACLE-TRACE §一)。插入 **P4-1a**:修 CL0 extract 真空 |
 | **P4-2** 生成式差分 | `gen.rs` 語義感知升級(生成時即知期望判決,參照 RustSmith 的 by-construction 合法性);`fuzz.rs` 併軌:每輪樣本雙跑;失敗 shrink → `tests/fixtures/`(沿用既有防線) | M | ✅ **已交付(2026-09-07,實測全綠)**:`gen::gen_r0_semantic`(by-construction 三類:Accept/借用衝突/移動,構造紀律見模組文檔)+ `model::fuzz_agreement`(雙跑引擎)+ `oracle_fuzz_agreement`(O-7 具名;250 輪)+ `fuzz` bin 併軌(2000 輪,`CL0R0_ORACLE_FUZZ_ROUNDS` 可調);**2000 輪 0 失配、0 範圍外**(rustc 1.98.1;統計見 ORACLE-TRACE §P4-2);shrink 防線沿用(P0 #3) |
-| **P4-3** 語義深化第一梯 | S1 place 敏感 + S2 控制流 killer(§五);差分暴露的 BUG 修至 0;MODEL-DIFF 表更新 | L | `test_law_semantic_place_orthogonality`(x.f1/x.f2 不衝突)、`test_law_semantic_cfg_liveness`(if/while 下 killer 精確);parity 門檻不回退 |
+| **P4-3** 語義深化第一梯 ✅(2026-09-07) | S1 place 敏感 + S2 控制流 killer(§五);差分暴露的 BUG 修至 0;MODEL-DIFF 表更新 | L | `test_law_semantic_place_orthogonality`(x.f1/x.f2 不衝突)、`test_law_semantic_cfg_liveness`(if/while 下 killer 精確);parity 門檻不回退 —— **實測**:具名律 O-8/O-9 雙錨 0 失敗;gate 41/41(註冊表 24→4,餘 F-G 範圍外);fuzz 2000 輪 gate over/under = (0,0)/(0,0)(P4-3 前 476/593、402/410);詳 ORACLE-TRACE §八 |
 | **P4-4** Tier-B 內嵌 | `DriverOracle`(feature-gated):HIR span 對照 → `mir_borrowck` 逐 loan 對帳 → polonius facts 第四意見(nightly job,不入主門檻) | M | `oracle_driver_loan_reconcile`(樣本點 ≥ 200,承 HARD-ITEMS #2「行為生成樣本」方案);`docs/ORACLE-TRACE.md` 附錄 |
 | **P4-5** 修法 oracle 化 | µ 真值 + 修復接受率(§六) | M | `test_menu_repairs_accepted_by_rustc`(Guarded 全規則 × fixtures 100% rustc-accept);`test_law_L8_red_edge_decreasing` 升級雙分量實測版 |
 | **P4-6** 真實語料抽樣 | crates.io top-N:函數級切片 → 是否落 R₀?`unsupported` 面實測報告 → 擴張排序數據化 | L | `docs/R0-COVERAGE-EMPIRICAL.md`(如實申報覆蓋率);擴張梯隊裁決記錄 |
@@ -183,7 +183,7 @@ tools/oracle_gate.py      // 類比 bench_gate:門檻 + 基線 + --update 重刷
 **建議節奏(首兩個迭代):**
 ```
 第五迭代:P4-0 + P4-1        → oracle 立起來,curated 百例parity 開表
-第六迭代:P4-2 + P4-3 前半   → 生成式差分上線;place 敏感動工
+第六迭代:P4-2 + P4-3        → 生成式差分上線;語義深化完成(over/under 0/0)
 ```
 
 ---
