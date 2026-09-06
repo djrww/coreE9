@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["K","Menu","Policy","Rule"],"fn":["apply","enumerate_states","l8_check","normalize","step"],"struct":["AState","Ev"]};

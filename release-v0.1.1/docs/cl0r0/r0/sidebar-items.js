@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["R0_EBNF"],"enum":["R0TokKind"],"fn":["lalr1_clean","r0_lex","r0_lexical_invariants","unsupported"],"struct":["R0Token"]};
