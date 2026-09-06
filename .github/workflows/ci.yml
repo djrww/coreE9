@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # P4-3+:工作分支 m1 / m1.1 同受九律矩陣約束(PAT 一次推送即驗);
+    # main 保持合流終點。
+    branches: [main, m1, m1.1]
   pull_request:
 
 env:
@@ -98,8 +100,14 @@ jobs:
       - name: clippy with oracle feature (deny warnings)
         run: cargo clippy --all-targets --features oracle -- -D warnings
 
-      - name: 外律 O 系測試(oracle 腳手架自證 + P4-1 parity 主律)
-        run: cargo test --features oracle --test oracle_laws
+      - name: 全測試矩陣(32 單測 + 32 內律 + 外律 O 系 9 條,含 P4-3 O-8/O-9)
+        run: cargo test --all --features oracle
 
-      - name: oracle gate(curated 語料 × 兩趟全等 × 基線對帳 × parity 註冊表)
+      - name: P4-2 生成式差分併軌(2000 輪 by-construction × rustc × 三軌;P4-3 後 over/under 必 0/0)
+        run: cargo run --features oracle --release --bin fuzz
+
+      - name: rustdoc with oracle feature (deny warnings)
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features oracle
+
+      - name: oracle gate(41 語料 × 兩趟全等 × 基線對帳 × parity 註冊表 4 項)
         run: python3 tools/oracle_gate.py corpus/curated corpus/BASELINE.json --parity
