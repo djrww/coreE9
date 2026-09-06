@@ -59,7 +59,7 @@ jobs:
         run: make -C rocq reconcile
 
   coverage:
-    name: coverage gate(core ≥ 90%,ast ≥ 75% 豁免)
+    name: coverage gate(core ≥ 90%,ast ≥ 75% 豁免;--features oracle 令 P4-2 生成器入計)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,8 +75,8 @@ jobs:
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
 
-      - name: Collect coverage
-        run: cargo llvm-cov --lcov --output-path target/coverage.lcov
+      - name: Collect coverage(全測試矩陣含 oracle 特徵:gen_r0_semantic 由 O-7 律覆蓋)
+        run: cargo llvm-cov --features oracle --lcov --output-path target/coverage.lcov
 
       - name: Coverage gate
         run: python3 tools/cov_gate.py target/coverage.lcov

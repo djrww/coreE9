@@ -1,7 +1,7 @@
 //! oracle —— Tier-A 語料對帳跑者(P4-0;docs/PIVOT-RUSTC-ORACLE.md §四)。
 //!
 //! 用法:
-//!   cargo run --features oracle --bin oracle -- run [--json] [corpus_dir]
+//!   cargo run --features oracle --bin oracle -- run (--json, corpus_dir 皆可選)
 //!   cargo run --features oracle --bin oracle -- version
 //!
 //! 語料檔名即期望(零配置;`cl0r0::oracle::Expectation::from_stem`):

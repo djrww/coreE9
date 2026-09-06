@@ -211,3 +211,84 @@ pub fn l7b_evaluate(src: &str) -> (usize, usize) {
     }
     (bad, rounds)
 }
+
+#[cfg(test)]
+mod validator_negative {
+    //! L5/L6 驗證器負案例(手工構造損壞 NodeView;CL0 解析器不可達,
+    //! 但防禦分支必須有真實覆蓋 —— P4-3 CI coverage 收緊)。
+
+    use super::*;
+
+    /// 手工樹:spans[i] = 節點 i 的 span;children[i] = 子節點 id 列表。
+    struct Manual {
+        spans: Vec<Span>,
+        children: Vec<Vec<u32>>,
+    }
+    impl NodeView for Manual {
+        fn node_count(&self) -> usize {
+            self.spans.len()
+        }
+        fn span_of(&self, id: u32) -> Span {
+            self.spans[id as usize]
+        }
+        fn children_of(&self, id: u32) -> &[u32] {
+            &self.children[id as usize]
+        }
+    }
+    type Spec<'a> = (&'a [(u32, u32)], &'a [u32]);
+    fn manual(raw: &[Spec]) -> Manual {
+        Manual {
+            spans: raw
+                .iter()
+                .map(|(sp, _)| *sp)
+                .map(|arr| Span::new(arr[0].0, arr[0].1))
+                .collect(),
+            children: raw.iter().map(|(_, ch)| ch.to_vec()).collect(),
+        }
+    }
+
+    /// 節點 span ≠ 子節點 union(check_continuity 第一防禦枝)。
+    #[test]
+    fn continuity_span_union_mismatch() {
+        let v = manual(&[(&[(0, 10)], &[1]), (&[(0, 5)], &[])]);
+        assert!(check_continuity(&v).is_err());
+    }
+
+    /// 子節點 span 重疊(check_continuity 第二防禦枝)。
+    #[test]
+    fn continuity_child_overlap() {
+        let v = manual(&[(&[(0, 10)], &[1, 2]), (&[(0, 6)], &[]), (&[(5, 10)], &[])]);
+        assert!(check_continuity(&v).is_err());
+    }
+
+    /// 同一子節點兩個父(check_tree_axioms 雙父防禦枝)。
+    #[test]
+    fn axioms_two_parents() {
+        let v = manual(&[
+            (&[(0, 10)], &[1, 3]),
+            (&[(0, 5)], &[]),
+            (&[(5, 10)], &[]),
+            (&[(5, 10)], &[1]),
+        ]);
+        assert!(check_tree_axioms(&v).is_err());
+    }
+
+    /// 節點自根不可達(check_tree_axioms 連通性防禦枝)。
+    #[test]
+    fn axioms_unreachable_node() {
+        let v = manual(&[
+            (&[(0, 10)], &[1]),
+            (&[(0, 5)], &[]),
+            (&[(5, 10)], &[]),
+            (&[(8, 9)], &[]), // 無人引用
+        ]);
+        assert!(check_tree_axioms(&v).is_err());
+    }
+
+    /// 兩 span 部分相交(非嵌套非不交)⇒ 非 laminar(check_laminar false 枝)。
+    #[test]
+    fn laminar_partial_overlap() {
+        let v = manual(&[(&[(0, 10)], &[]), (&[(5, 15)], &[])]);
+        assert!(!check_laminar(&v));
+    }
+}
