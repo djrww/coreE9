@@ -26,7 +26,7 @@
 `tools/rocq_reconcile.py`(Rust 實例 ↔ Rocq 計算,kernel 複驗 19 樣本點;
 已抓出並修正 R4Runtime 尾插/頭插分歧)+ CI job `rocq`。
 
-## 〇、測試全量清單(47 具名測試)
+## 〇、測試全量清單(50 具名測試)
 
 **CL0 載體 — 九律 + 編輯單體 + 定理 + 語義面(31,`tests/laws.rs`)**
 
@@ -135,7 +135,7 @@
 | §5.3 | 配置快照(增量重析界)| `test_reuse_data_consistency` | `parse::Tree`(cfgs 欄位)| ⚠️ 工具綠 |
 | §6.3 | 判定權不轉移(rustc 面記 0)| `test_law_L8_measure_is_guaranteeing_termination` | `rep`(μ 定義)| ✅ |
 | 附錄 A | L1–L9 全矩陣 | 上表 16 條 | — | ✅ |
-| 附錄 B | R₀ EBNF(見下節) | 下節 8 條 | `r0` | ✅ |
+| 附錄 B | R₀ EBNF(pest 機器形式,見「附錄 B」節) | §二 8 條 + pest parity 3 條 | `r0` / `src/r0.pest` | ✅ |
 | §9 | 非目標:不重造 rustc;側條件 = 如實申報 | `r0_parse_unsupported_nodes` / `r0_unsupported_detects` | `r0::{unsupported, r0_parse}` | ✅ |
 
 ---
@@ -159,6 +159,65 @@
 > 是機器界,不是「假裝覆蓋」。
 
 ---
+
+## 附錄 B、R₀ EBNF(pest 機器形式,2026-09-07)
+
+R₀ 語法的權威機器形式 = **`src/r0.pest`**(pest 2.9.1)。此前「EBNF」只散見
+於 `r0.rs` 各解析函數的註釋;P4-7 預定本附錄位置,現以 pest 文法正式落地,
+並由 parity 律證明與手寫 `r0_lex` + `r0_parse` **同面**:
+
+**法律面**(pest 接受集 = R₀ 無 Error/Unsupported 節點的輸入):
+
+```
+program  = { item }
+item     = fn_item | struct_item
+fn_item  = "fn" IDENT "(" [ param { "," param } ] [ "->" type ] block
+param    = IDENT [ ":" type ]
+struct   = "struct" IDENT "{" [ field { "," field } [","] ] "}"
+field    = IDENT ":" type
+type     = "&mut" type | "&" type | "[" type "]" | IDENT
+block    = "{" { stmt } "}"
+stmt     = let | return | if | while | loop | expr_stmt
+let      = "let" ["mut"] IDENT [":" type] ["=" expr] ";"
+return   = "return" [expr] ";"
+if       = "if" expr block ["else" (if | block)]
+while    = "while" expr block
+loop     = "loop" block
+expr_st  = block | expr ";"          ;  ; 僅塊表達式可省(同 is_block_stmt)
+expr     = assign
+assign   = or [ "=" assign ]
+or       = and { "||" and }
+and      = eq { "&&" eq }
+eq       = rel { "==" | "!=" rel }
+rel      = add { "<" | "<=" | ">" | ">=" add }
+add      = mul { "+" | "-" mul }
+mul      = unary { "*" | "/" | "%" unary }
+unary    = ("&mut" | "&" | "*" | "!") postfix | postfix
+postfix  = primary { "." IDENT | "[" expr "]" | call }
+call     = "(" [ expr { "," expr } [","] ] ")"
+primary  = raw_string | NUMBER | "true" | "false" | IDENT | "(" expr ")" | block
+```
+
+**詞法邊界規則與 `r0_lex` 逐條同判據**:`&mut` 須詞界(`&mutx` = `&` +
+`mutx`)、`-`/`->`、`=`/`==`、`!`/`!=`、`//` 註釋、`<<`/`|` = Bad(側條件)、
+raw string 的 `#` 計數、`r#` 分支先於 ident 掃描。
+
+**側條件不在本面**:Error/Unsupported 構造(閉包、生命週期、屬性、宏、
+match、泛型、排除項)由 R₀ totalization 如實申報;pest 對同輸入**同側
+失敗** —— 邊界律實測。
+
+**parity 律**(`tests/pest_r0_parity.rs`,3 條具名;pest 只在
+dev-dependencies,lib 依賴恆 0):
+
+| 具名測試 | 合同 |
+|---|---|
+| `test_pest_r0_parity_corpus` | 41 curated 語料:40 法律面 pest token 流 ≡ `r0_parse` 非 Trivia token 流(kind+span 逐項);1 側條件面同側失敗 |
+| `test_pest_r0_parity_fuzz` | 500 輪 by-construction 生成樣本同上 |
+| `test_pest_boundary_illegal` | 8 非法形狀:R₀ 側條件節點(Error∨Unsupported) ⟺ pest 失敗 |
+
+> 紀律:pest 文法是 EBNF 的**機器形式**,不是第二解柝器載體 —— 語義面
+> (`model.rs`)與九律仍以 `r0_parse` 為唯一輸入;若日後 P4-7 要收編 pest
+> 為正式載體,需另開項並重走全套 parity(含 totalization 面)。
 
 ## 三、誠實留白(不假裝覆蓋)
 

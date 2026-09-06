@@ -1,0 +1,128 @@
+// R₀ 文法(pest 形)—— SPEC-TRACE 附錄 B EBNF 的機器可讀形式。
+//
+// 對帳目標:src/r0.rs 手寫 `r0_lex` + `r0_parse`(法律面;totalization 的
+// Error/Unsupported 側條件不在本文法內 —— pest 對非法輸入直接失敗,
+// 與 R₀「產生 Error 節點」同側,由 tests/pest_r0_parity.rs 的
+// 邊界律實測)。
+//
+// 紀律:
+//   * 詞法邊界規則與 r0_lex 逐條同判據(`&mut` 詞界、`-`/`->`、`=`/`==`、
+//     `!`/`!=`、`//` 註釋、raw string 的 # 計數);
+//   * 表達式扁平優先級鏈與 parse_assign_body..parse_primary 同序;
+//   * 尾隨逗號:形參不收(EBNF 合同)、結構體字段收、呼叫實參收(同解析器)。
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" | "//" ~ (!"\n" ~ ANY)* }
+
+// ---------- 詞法(token 級,atomic:內部無隱式空白)----------
+
+HASH = _{ "#" }
+IDENTPART = _{ ASCII_ALPHANUMERIC | "_" }
+
+// 關鍵字 = 有限集;標識字 = 整詞非關鍵字(`iffy` 合法,`if` 不合法)。
+keyword = _{ "fn" | "struct" | "let" | "mut" | "if" | "else"
+           | "while" | "loop" | "return" | "true" | "false" }
+IDENT = @{ !(keyword ~ !IDENTPART) ~ (ASCII_ALPHA | "_") ~ IDENTPART* }
+NUMBER = @{ ASCII_DIGIT+ }
+RAWSTRING = @{ "r" ~ HASH+ ~ "\"" ~ (!("\"" ~ HASH+) ~ ANY)* ~ "\"" ~ HASH+ }
+
+fn_kw     = @{ "fn" ~ !IDENTPART }
+struct_kw = @{ "struct" ~ !IDENTPART }
+let_kw    = @{ "let" ~ !IDENTPART }
+mut_kw    = @{ "mut" ~ !IDENTPART }
+if_kw     = @{ "if" ~ !IDENTPART }
+else_kw   = @{ "else" ~ !IDENTPART }
+while_kw  = @{ "while" ~ !IDENTPART }
+loop_kw   = @{ "loop" ~ !IDENTPART }
+return_kw = @{ "return" ~ !IDENTPART }
+true_kw   = @{ "true" ~ !IDENTPART }
+false_kw  = @{ "false" ~ !IDENTPART }
+
+// `&` 三態(同 r0_lex 順序):&& / &mut(詞界)/ &
+amp_and  = @{ "&&" }
+amp_mut  = @{ "&mut" ~ !IDENTPART }
+amp      = @{ "&" ~ !("&" | "mut" ~ !IDENTPART) }
+star     = @{ "*" }
+plus     = @{ "+" }
+minus    = @{ "-" ~ !">" }
+arrow    = @{ "->" }
+// `//` 是註釋(WHITESPACE),故 `/` 後不可再跟 `/`。
+slash    = @{ "/" ~ !"/" }
+percent  = @{ "%" }
+eq_eq    = @{ "==" }
+eq       = @{ "=" ~ !"=" }
+not_eq   = @{ "!=" }
+not      = @{ "!" ~ !"=" }
+le       = @{ "<=" }
+// `<<` 在 R₀ 為詞法 Bad(不在法律面)。
+lt       = @{ "<" ~ !("<" | "=") }
+ge       = @{ ">=" }
+gt       = @{ ">" ~ !"=" }
+dot      = @{ "." }
+semi     = @{ ";" }
+colon    = @{ ":" }
+comma    = @{ "," }
+lparen   = @{ "(" }
+rparen   = @{ ")" }
+lbrace   = @{ "{" }
+rbrace   = @{ "}" }
+lbrack   = @{ "[" }
+rbrack   = @{ "]" }
+or_or    = @{ "||" }
+
+// ---------- 項層(法律面 = fn / struct;側條件項不在本面)----------
+
+program = { SOI ~ item* ~ EOI }
+item = _{ fn_item | struct_item }
+
+fn_item = { fn_kw ~ IDENT ~ lparen ~ params ~ rparen
+           ~ (arrow ~ type_ref)? ~ block }
+
+// EBNF:`[ params ]`,`params = param { "," param }` —— 不收導前/尾隨/雙逗號。
+params = _{ (param ~ (comma ~ param)*)? }
+param = { IDENT ~ (colon ~ type_ref)? }
+
+// EBNF:`[ field { "," field } [","] ]` —— 尾隨逗號合法。
+struct_item = { struct_kw ~ IDENT ~ lbrace
+               ~ (field ~ (comma ~ field)* ~ comma?)? ~ rbrace }
+field = { IDENT ~ colon ~ type_ref }
+
+// 型別:`&mut T` / `&T` / `[T]` / `Ident`(泛型側條件不在本面)。
+type_ref = { (amp_mut | amp) ~ type_ref | lbrack ~ type_ref ~ rbrack | IDENT }
+
+block = { lbrace ~ stmt* ~ rbrace }
+
+// ---------- 語句 ----------
+
+stmt = _{ let_stmt | return_stmt | if_stmt | while_stmt | loop_stmt | expr_stmt }
+
+let_stmt = { let_kw ~ mut_kw? ~ IDENT ~ (colon ~ type_ref)? ~ (eq ~ expr)? ~ semi }
+
+return_stmt = { return_kw ~ expr? ~ semi }
+
+if_stmt = { if_kw ~ expr ~ block ~ (else_kw ~ (if_stmt | block))? }
+
+while_stmt = { while_kw ~ expr ~ block }
+
+loop_stmt = { loop_kw ~ block }
+
+// `;` 僅塊表達式語句可省(與解析器 is_block_stmt 判據同)。
+expr_stmt = { block | expr ~ semi }
+
+// ---------- 表達式(扁平優先級鏈,與 parse_*_body 同序)----------
+
+expr = { assign }
+assign = { or_body ~ (eq ~ assign)? }
+or_body = { and_body ~ (or_or ~ and_body)* }
+and_body = { eq_body ~ (amp_and ~ eq_body)* }
+eq_body = { rel_body ~ ((eq_eq | not_eq) ~ rel_body)* }
+rel_body = { add_body ~ ((lt | le | gt | ge) ~ add_body)* }
+add_body = { mul_body ~ ((plus | minus) ~ mul_body)* }
+mul_body = { unary ~ ((star | slash | percent) ~ unary)* }
+unary = { (amp_mut | amp | star | not) ~ postfix | postfix }
+postfix = { primary ~ postfix_op* }
+postfix_op = _{ dot ~ IDENT | lbrack ~ expr ~ rbrack | call }
+call = { lparen ~ (expr ~ (comma ~ expr)* ~ comma?)? ~ rparen }
+
+// raw string 優先於 IDENT(同 r0_lex 的 `r#` 分支先於 ident 掃描)。
+primary = { RAWSTRING | NUMBER | true_kw | false_kw | IDENT
+           | lparen ~ expr ~ rparen | block }
