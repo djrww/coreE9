@@ -6,6 +6,7 @@
 //!   * `gen_garbage` / `gen_half_file` —— 任意字節串與「寫一半的檔案」
 //!     (驗 L1 全輸入回環、L7b 良構極大)。
 //!   * `gen_edit` —— 隨機編輯(編輯單體、增量層工具的輸入)。
+//!   * `gen_r0_case` —— P4-2 語義感知生成:by-construction 期望判決的 R₀ 案例。
 //!
 //! 全部使用自帶的 xorshift64(零依賴、確定性、可重現)。
 
@@ -337,4 +338,143 @@ pub fn gen_edit(rng: &mut Rng, src_len: usize) -> Edit {
         text.push_str(rng.pick(chips));
     }
     Edit::new(p as u32, (p + old_len) as u32, &text)
+}
+
+// ===========================================================================
+// P4-2:語義感知生成式差分 —— by-construction 期望判決
+// ===========================================================================
+// 這裡生成「生成時即知期望判決」的 R₀ 案例:每個 family 的構造保證(依
+// rustc 實測 2026-09-07):
+//   * Accept     —— 無借用衝突的合法程式;
+//   * E0503      —— &mut 作用域內讀取(borrow 於讀取後仍存活);
+//   * E0506      —— &mut 作用域內賦值;
+//   * E0499      —— 同時存活兩個 &mut(第二個借用在第一個尚存活時);
+//   * E0502      —— 共享借用在存活期間被 &mut 借用(call-arg 形式)。
+// 期望並非「猜想」,而是生成時的事實:若 rustc 給出不同判決,即生成器預期
+// 錯誤(BUG),值得測試抓出。由此把 `gen.rs` 升級為語義感知生成器
+// (PIVOT-RUSTC-ORACLE §八 P4-2),而非「語法合法但語義無所謂」的舊 gen_legal。
+
+/// by-construction 期望判決(§八 P4-2)。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GenExpect {
+    /// 期望 rustc 接受(無借用衝突)。
+    Accept,
+    /// 期望 rustc 拒絕且**含**該借用衝突錯誤碼。
+    Reject(&'static str),
+}
+
+/// 一個語義感知生成的案例:源碼 + 生成時即知的期望判決。
+#[derive(Clone, Debug)]
+pub struct GenCase {
+    /// R₀ 源碼(落入附錄 B 片段,模型在範圍內)。
+    pub src: String,
+    /// 生成時即知的期望判決。
+    pub expect: GenExpect,
+}
+
+impl GenCase {
+    /// 期望的錯誤碼(Accept → None)。
+    pub fn expect_code(&self) -> Option<&'static str> {
+        match self.expect {
+            GenExpect::Accept => None,
+            GenExpect::Reject(c) => Some(c),
+        }
+    }
+}
+
+/// 基底變數名(衝突/合法案例一律以它為單一受測變量;輔助變數 r/r1/r2/y/z
+/// 與之固定錯位,不作隨機化,避免「基底名 == 輔助名」的遮蔽/未定義歧義)。
+const BASE_VAR: &str = "x";
+
+/// 生成一個語義感知案例(隨機化縮排 + 可選嵌套塊 + 隨機 family)。
+pub fn gen_r0_case(rng: &mut Rng) -> GenCase {
+    let ind = if rng.chance(1, 3) { "    " } else { "" };
+    let wrap_block = rng.chance(1, 3);
+    // 依 family 選擇生成體。
+    match rng.below(6) {
+        0 => clean_case(ind, wrap_block),
+        1 => conflict_case(ind, wrap_block, "E0503", ConflictKind::BorrowRead),
+        2 => conflict_case(ind, wrap_block, "E0506", ConflictKind::BorrowAssign),
+        3 => conflict_case(ind, wrap_block, "E0499", ConflictKind::DoubleBorrow),
+        4 => conflict_case(ind, wrap_block, "E0502", ConflictKind::SharedThenCall),
+        _ => clean_case(ind, wrap_block),
+    }
+}
+
+/// 衝突 family 的種類(by-construction 期望見各分支)。
+#[derive(Clone, Copy)]
+enum ConflictKind {
+    /// &mut 作用域內讀取。
+    BorrowRead,
+    /// &mut 作用域內賦值。
+    BorrowAssign,
+    /// 同時存活兩個 &mut。
+    DoubleBorrow,
+    /// 共享借用在存活期間被 &mut 借用(call-arg 形式)。
+    SharedThenCall,
+}
+
+/// 合法案例:讀/賦值/再讀,無借用衝突(期望 Accept)。
+fn clean_case(ind: &str, wrap_block: bool) -> GenCase {
+    let (pre, post) = if wrap_block {
+        ("    {\n", "    }\n")
+    } else {
+        ("", "")
+    };
+    let v = BASE_VAR;
+    let src = format!(
+        "fn f() {{\n{pre}{ind}let mut {v} = 1;\n\
+         {ind}{v} = {v} + 1;\n{ind}let y = {v};\n{ind}let _ = y;\n{post}}}",
+        pre = pre,
+        v = v,
+        ind = ind,
+        post = post
+    );
+    GenCase {
+        src,
+        expect: GenExpect::Accept,
+    }
+}
+
+/// 衝突案例:在函數體內構造指定借用衝突。期望以 code 標明。
+/// 一律先宣告基底 `let mut x = 1;`(否則 rustc 會以 E0425「找不到值」拒絕,
+/// 而非「借用衝突」—— 兩者皆是 reject,但期望碼不同,必須對齊)。
+fn conflict_case(ind: &str, wrap_block: bool, code: &'static str, kind: ConflictKind) -> GenCase {
+    let v = BASE_VAR;
+    let g = if matches!(kind, ConflictKind::SharedThenCall) {
+        "fn g(p: &mut i32) { *p = *p + 1; }\n"
+    } else {
+        ""
+    };
+    let (pre, post) = if wrap_block {
+        ("    {\n", "    }\n")
+    } else {
+        ("", "")
+    };
+    let decl = format!("{ind}let mut {v} = 1;\n");
+    let body = match kind {
+        ConflictKind::BorrowRead => format!(
+            "{decl}{ind}let r = &mut {v};\n{ind}let y = {v} + 1;\n{ind}let z = *r;"
+        ),
+        ConflictKind::BorrowAssign => format!(
+            "{decl}{ind}let r = &mut {v};\n{ind}{v} = 2;\n{ind}let z = *r;"
+        ),
+        ConflictKind::DoubleBorrow => format!(
+            "{decl}{ind}let r1 = &mut {v};\n{ind}let r2 = &mut {v};\n{ind}*r1 = *r1 + 1;\n{ind}*r2 = *r2 + 1;"
+        ),
+        ConflictKind::SharedThenCall => format!(
+            "{decl}{ind}let r = &{v};\n{ind}g(&mut {v});\n{ind}let z = *r;"
+        ),
+    };
+    let src = format!(
+        "{g}fn f() {{\n{pre}{body}\n{post}}}",
+        g = g,
+        pre = pre,
+        body = body,
+        post = post
+    );
+    GenCase {
+        src,
+        expect: GenExpect::Reject(code),
+    }
 }

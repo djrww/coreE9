@@ -223,3 +223,112 @@ fn oracle_parity_borrow_matrix() {
         }
     }
 }
+
+/// O-7(P4-2 主律):語義感知生成式差分 —— by-construction agreement。
+///
+/// 由 `gen::gen_r0_case` 生成「生成時即知期望判決」的 R₀ 案例,再以
+/// rustc oracle × 模型三軌做 accept/reject 層對帳。四項斷言:
+///   ① 生成器自洽:每個生成案例都能被 `r0_parse` 解析且無 error/unsupported
+///      (進入模型範圍)—— 生成器不得產出「模型無從判」的案例;
+///   ② 生成器預期可驗:rustc 判決 == 生成時的 by-construction 期望 —— 若不符,
+///      是生成器對 rustc 行為的**預期錯誤**(BUG),不是模型分歧;
+///   ③ 幾何保守下界定律(生成面):rustc 以借用衝突類碼(E0499/E0502/E0503/E0506)
+///      拒絕的每個生成案例,Lexical 軌必拒絕 —— 下界定律在生成式差分下依然成立
+///      (0 BUG 分歧);
+///   ④ 統計入 REPORT:nll / referent 軌的 divergences 記錄為 MODEL-DIFF
+///      (模型邊界,見 `model.rs` 模組文檔),並打印分布(accept/reject 各碼)。
+///
+/// 與 O-6(curated 對帳)互補:O-6 是「人選案例」,O-7 是「機器生成案例」——
+/// 兩者都必須 0 BUG 分歧。
+#[test]
+fn oracle_fuzz_agreement() {
+    use cl0r0::gen::{gen_r0_case, GenExpect};
+    use cl0r0::model::{model_check, BORROW_CONFLICT_CODES};
+    use cl0r0::oracle::{CliOracle, Oracle};
+    let o = CliOracle::new();
+    let mut rng = cl0r0::gen::Rng::new(0x00C1_092A_0002);
+
+    let n = 400usize;
+    let mut accept = 0usize;
+    let mut reject: std::collections::BTreeMap<&'static str, usize> = Default::default();
+    let mut model_diff = 0usize;
+    let mut bug = Vec::new();
+
+    for _ in 0..n {
+        let c = gen_r0_case(&mut rng);
+
+        // ① 模型範圍(生成器自洽)
+        let m = model_check(&c.src);
+        assert!(m.in_scope, "生成案例應在模型範圍內(生成器 BUG):\n{}", c.src);
+
+        // ② 生成器 by-construction 預期 vs rustc 判決
+        let rep = o
+            .check(&c.src)
+            .expect("rustc oracle 應可用(PATH 需有 rustc)");
+        let rustc_codes = rep.verdict.codes();
+        match &c.expect {
+            GenExpect::Accept => {
+                assert!(
+                    rep.verdict.is_accept(),
+                    "生成器期望 Accept 但 rustc 拒絕 {:?}:\n{}",
+                    rustc_codes,
+                    c.src
+                );
+                accept += 1;
+            }
+            GenExpect::Reject(code) => {
+                assert!(
+                    rep.verdict.has_code(code),
+                    "生成器期望 {code} 但 rustc 判決 {:?}:\n{}",
+                    rustc_codes,
+                    c.src
+                );
+                *reject.entry(*code).or_insert(0) += 1;
+            }
+        }
+
+        // ③ 幾何保守下界(生成面):借用衝突 ⇒ Lexical 必拒
+        let is_borrow_conflict = rustc_codes
+            .iter()
+            .any(|x| BORROW_CONFLICT_CODES.contains(&x.as_str()));
+        if is_borrow_conflict && !rep.verdict.is_accept() {
+            let lx = m
+                .tracks
+                .iter()
+                .find(|t| t.track == "lexical")
+                .expect("in_scope 案例必有 lexical 軌");
+            if !lx.reject {
+                bug.push(format!(
+                    "Lexical 漏報(幾何下界違反):rustc {:?}:\n{}",
+                    rustc_codes, c.src
+                ));
+            }
+        }
+
+        // ④ nll / referent 分歧 = MODEL-DIFF(統計),非法於 BUG
+        for t in m.tracks.iter() {
+            if t.track == "lexical" {
+                continue;
+            }
+            // accept/reject 分歧定義:模型與 rustc 對「是否接受」不一致
+            let disagree = t.reject == rep.verdict.is_accept();
+            if disagree {
+                model_diff += 1;
+            }
+        }
+    }
+
+    // 報告(統計入 REPORT;審計可見,不入斷言)
+    eprintln!("[O-7 REPORT] 生成 {n} 案例:accept {accept} / reject {reject:?}");
+    eprintln!("[O-7 REPORT] nll+referent MODEL-DIFF 分歧 {model_diff} 項(模型邊界,非 BUG)");
+    assert!(accept > 100, "accept 案例應占多數(>100),實得 {accept}");
+    assert!(
+        reject.get("E0503").copied().unwrap_or(0)
+            + reject.get("E0506").copied().unwrap_or(0)
+            + reject.get("E0499").copied().unwrap_or(0)
+            + reject.get("E0502").copied().unwrap_or(0)
+            >= 50,
+        "借用衝突家族應生成 ≥50 案例,實得 {reject:?}"
+    );
+    assert!(bug.is_empty(), "生成式差分 0 BUG 分歧:\n{}", bug.join("\n"));
+}

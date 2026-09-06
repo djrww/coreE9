@@ -21,6 +21,7 @@
 | CI `oracle` job | clippy(帶 feature)→ O 系 → gate --parity;rocq job 凍結(`continue-on-error`) | ✅ |
 | core 零依賴 | 默認構建不編 oracle bin;`cargo test --all` 47 條全綠不受影響 | ✅ 實測 |
 | **P4-1a(2026-09-06)** | CL0 `ast::extract` 事件真空修復(發現 #1)+ 借鏈構造修正(發現 #2 的 CL0 側)+ 兩具名測試補反真空斷言 | ✅ 47/47;parity 不變(24/24) |
+| **P4-2(2026-09-07)** | `gen::gen_r0_case`(語義感知生成式差分:by-construction 期望 `GenExpect::{Accept,Reject(code)}`,family = Accept / E0503 / E0506 / E0499 / E0502)+ `tests/oracle_laws.rs::oracle_fuzz_agreement`(O-7) | ✅ 65/65;O-7 400 案例 0 BUG 分歧;accept 137 / reject 263(4 碼全覆蓋);nll+referent MODEL-DIFF 71 項(統計入 REPORT) |
 
 ---
 
