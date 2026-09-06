@@ -353,13 +353,9 @@ pub fn normalize(mut s: AState, menu: Menu, policy: Policy) -> (AState, usize) {
 pub fn l8_check(s: &AState, menu: Menu, policy: Policy) -> Option<(AState, AState, Rule)> {
     for r in menu.applicable(s, policy) {
         if let Some(s2) = apply(s, r) {
-            if policy == Policy::Guarded {
-                // Guarded 由 applicable 保證;這裡獨立複驗。
-                if !AState::strictly_decreases(s2.measure(), s.measure()) {
-                    return Some((s.clone(), s2, r));
-                }
-            } else if !AState::strictly_decreases(s2.measure(), s.measure()) {
-                // Raw:非嚴格遞減即違反
+            // Guarded 由 applicable 保證嚴格遞減;Raw 無側條件,非嚴格遞減即違反。
+            // 兩者在「是否嚴格遞減」的判據上完全一致,故合併為單一檢查。
+            if !AState::strictly_decreases(s2.measure(), s.measure()) {
                 return Some((s.clone(), s2, r));
             }
         }

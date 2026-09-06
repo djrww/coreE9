@@ -18,6 +18,7 @@
 //!      無損回環 + 節點級 `unsupported` 申報,§9 如實申報的結構化形式)。
 
 use crate::span::Span;
+use crate::tree::TreeGeometry;
 
 /// 附錄 B:R₀ 的機讀 EBNF(本模組的語法契約)。
 pub const R0_EBNF: &str = r#"(* 附錄 B — R₀:實用載體。設計準則:落在 LALR(1) 可處理的片段內,歧義點以側條件排除。 *)
@@ -844,92 +845,34 @@ impl R0Tree {
         &self.nodes[id as usize]
     }
 
-    /// §1.2 連續性公理(與 CL0 同式):內部節點跨度 = [首子.start, 末子.end)
-    /// 且子節點依序不交。
+    /// §1.2 連續性公理(共享 `TreeGeometry` 特質;與 CL0 同式)。
     pub fn validate_continuity(&self) -> Result<(), String> {
-        for (id, node) in self.nodes.iter().enumerate() {
-            if node.children.is_empty() {
-                continue;
-            }
-            let first = self.nodes[node.children[0] as usize].span;
-            let last = self.nodes[*node.children.last().unwrap() as usize].span;
-            if node.span != Span::new(first.start, last.end) {
-                return Err(format!(
-                    "node {} ({:?}) span {} != children union [{}, {})",
-                    id, node.kind, node.span, first.start, last.end
-                ));
-            }
-            let mut prev_end = first.start;
-            for &c in &node.children {
-                let cs = self.nodes[c as usize].span;
-                if cs.start < prev_end {
-                    return Err(format!(
-                        "node {} ({:?}) children overlap at {}",
-                        id, node.kind, c
-                    ));
-                }
-                prev_end = cs.end;
-            }
-        }
-        Ok(())
+        TreeGeometry::validate_continuity(self)
     }
 
-    /// 樹公理:每節點至多一父、自根連通。
+    /// 樹公理:每節點至多一父、自根連通(共享 `TreeGeometry` 特質)。
     pub fn validate_tree_shapes(&self) -> Result<(), String> {
-        let mut parent_of = vec![u32::MAX; self.nodes.len()];
-        for (id, node) in self.nodes.iter().enumerate() {
-            for &c in &node.children {
-                if parent_of[c as usize] != u32::MAX {
-                    return Err(format!("node {} has two parents", c));
-                }
-                parent_of[c as usize] = id as u32;
-            }
-        }
-        let mut seen = vec![false; self.nodes.len()];
-        let mut stack = vec![0u32];
-        while let Some(id) = stack.pop() {
-            if seen[id as usize] {
-                continue;
-            }
-            seen[id as usize] = true;
-            for &c in &self.nodes[id as usize].children {
-                stack.push(c);
-            }
-        }
-        for (id, s) in seen.iter().enumerate() {
-            if !s {
-                return Err(format!("node {} unreachable from root", id));
-            }
-        }
-        Ok(())
+        TreeGeometry::validate_tree_shapes(self)
     }
 
     /// L5 檢查:任意兩節點 span 要嘛嵌套、要嘛不交(laminar 族)。
     pub fn laminar_ok(&self) -> bool {
-        let n = self.nodes.len();
-        for i in 0..n {
-            let a = self.nodes[i].span;
-            for j in (i + 1)..n {
-                let b = self.nodes[j].span;
-                if a.overlaps(&b) && !a.contains(&b) && !b.contains(&a) {
-                    return false;
-                }
-            }
-        }
-        true
+        TreeGeometry::laminar_ok(self)
     }
 
     /// ERROR 節點數(§2.3 全化的「錯誤面」度量)。
     pub fn n_errors(&self) -> usize {
-        self.nodes
-            .iter()
-            .filter(|n| n.kind == R0Kind::Error)
-            .count()
+        TreeGeometry::n_errors(self)
     }
 
     /// 是否存在 ERROR 節點(L7a 判據)。
     pub fn has_error(&self) -> bool {
-        self.n_errors() > 0
+        TreeGeometry::has_error(self)
+    }
+
+    /// 節點總數(樹規模)。
+    pub fn total_nodes(&self) -> usize {
+        TreeGeometry::total_nodes(self)
     }
 
     /// 節點級 unsupported 申報:全部 (span, 原因) 對(§9 如實申報的結構化形式)。
@@ -974,10 +917,20 @@ impl R0Tree {
         go(self, self.root(), &mut out);
         out
     }
+}
 
-    /// 節點總數(樹規模)。
-    pub fn total_nodes(&self) -> usize {
+impl TreeGeometry for R0Tree {
+    fn nodes_len(&self) -> usize {
         self.nodes.len()
+    }
+    fn node_span(&self, id: u32) -> Span {
+        self.nodes[id as usize].span
+    }
+    fn node_children(&self, id: u32) -> &[u32] {
+        &self.nodes[id as usize].children
+    }
+    fn is_error(&self, id: u32) -> bool {
+        self.nodes[id as usize].kind == R0Kind::Error
     }
 }
 

@@ -10,7 +10,6 @@ use cl0r0::gen::{gen_edit, gen_garbage, gen_half_file, gen_legal, Rng};
 use cl0r0::parse::{parse, reparse};
 use cl0r0::rep::{self, AState, Ev, Menu, Policy, K};
 use cl0r0::shrink::shrink_to_minimal;
-use cl0r0::span::Span;
 use cl0r0::tree::l7b_evaluate;
 
 fn main() {
@@ -396,9 +395,4 @@ fn exhaust(alphabet: &[&str], depth: usize, max: usize, cur: &mut String, f: &mu
         exhaust(alphabet, depth + 1, max, cur, f);
         cur.truncate(cur.len() - a.len());
     }
-}
-
-#[allow(dead_code)]
-fn sp(x: u32, y: u32) -> Span {
-    Span::new(x, y)
 }

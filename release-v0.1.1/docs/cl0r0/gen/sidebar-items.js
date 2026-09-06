@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["gen_edit","gen_garbage","gen_half_file","gen_legal"],"struct":["Rng"]};

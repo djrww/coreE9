@@ -33,22 +33,9 @@ required-features = ["oracle"]
 # 默認關閉;啟用:`cargo test --features oracle`(CI 的 oracle job)。
 oracle = []
 
-[[bench]]
-name = "hotpaths"
-harness = false
-
 [profile.release]
 debug = true
 # PGO + LTO 優化(LTO 固化在 profile;PGO 由 RUSTFLAGS 驅動兩輪構建)
 lto = "fat"
 codegen-units = 1
 opt-level = 3
-
-# 基準專用 profile:显式錨死優化層級,避免日後改 [profile.release]
-# 或 cargo 預設變動讓 bench/BASELINE.json 整套失真(需重跑 --update)。
-[profile.bench]
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-incremental = false
-debug = true

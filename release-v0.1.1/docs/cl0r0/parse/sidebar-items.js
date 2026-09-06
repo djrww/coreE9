@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["RECURSION_LIMIT"],"enum":["Kind","ParseIssue"],"fn":["euler_characteristic","parse","reparse"],"struct":["Cfg","Node","ReparseOut","ReuseData","Tree"],"type":["NodeId"]};

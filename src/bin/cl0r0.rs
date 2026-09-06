@@ -3,9 +3,8 @@
 //! 運行:`cargo run --bin cl0r0`(全綠輸出 0 個失敗即為機械自証通過)。
 
 use cl0r0::ast::{self, Track};
-use cl0r0::parse::{parse, Kind};
-use cl0r0::rep::{self, AState, Ev, Menu, Policy, Rule, K};
-use cl0r0::span::Span;
+use cl0r0::parse::parse;
+use cl0r0::rep::{self, AState, Ev, Menu, Policy, K};
 
 fn main() {
     println!("======================================================================");
@@ -89,10 +88,8 @@ fn main() {
         );
     }
 
-    let mut total_red = 0usize;
     for track in [Track::Lexical, Track::Nll, Track::Referent] {
         let edges = ast::red_edges(&facts, track);
-        total_red += edges.len();
         println!("\n[{} 軌] 紅邊 {} 條:", track.label(), edges.len());
         for e in &edges {
             println!(
@@ -214,12 +211,6 @@ fn main() {
     println!("\n======================================================================");
     println!(" 總計:九律矩陣的機械檢查結果見 `tests/laws.rs` 與 `cargo run --bin l9newman`");
     println!("======================================================================");
-    let _ = (
-        total_red,
-        Rule::R1Shorten(0, 1),
-        Kind::Root,
-        Span::new(0, 0),
-    );
 }
 
 fn ok(b: bool) -> &'static str {

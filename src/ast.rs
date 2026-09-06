@@ -121,24 +121,27 @@ pub struct Facts {
 }
 
 /// 相容性違反表(§3.3):哪些事件對在「活躍區間相交」時構成紅邊。
-/// 規則(與 rustc 的近似,足夠演示幾何):
-///   * `&mut` 與除「自身」外的一切併發訪問(讀/移/借用/解引用)衝突;
+/// 規則(與 rustc 的近似,足夠演示幾何;相容性對稱):
+///   * `&mut` 與除「自身 + 解引用」外的併發訪問(讀/移/共享借用)衝突;
 ///   * `&` 共享借用與移動衝突(借出的值被移動);
-///   * 其餘(讀-讀、讀-&、&-&)合法。
+///   * 其餘(讀-讀、讀-&、&-&、解引用)合法。
+///
+/// 注:`Deref` 視為借用鏈的**內部使用**,不另行與 `&mut` 構成相容性衝突
+/// (見 `tests/laws.rs` 的 `test_law_semantic_conflict_matrix` 判據表)。
+/// 故本函數對偶寫出全部衝突對,不依賴枚舉值域的降序排序。
 pub fn conflicts(k1: EvKind, k2: EvKind) -> bool {
-    let mut a = k1;
-    let mut b = k2;
-    if b as u8 > a as u8 {
-        std::mem::swap(&mut a, &mut b);
-    }
+    use EvKind::*;
     matches!(
-        (a, b),
-        (EvKind::BorrowMut, EvKind::BorrowMut)
-            | (EvKind::BorrowMut, EvKind::BorrowSh)
-            | (EvKind::BorrowMut, EvKind::Read)
-            | (EvKind::BorrowMut, EvKind::Move)
-            | (EvKind::BorrowMut, EvKind::Deref)
-            | (EvKind::BorrowSh, EvKind::Move)
+        (k1, k2),
+        (BorrowMut, BorrowMut)
+            | (BorrowMut, BorrowSh)
+            | (BorrowSh, BorrowMut)
+            | (BorrowMut, Read)
+            | (Read, BorrowMut)
+            | (BorrowMut, Move)
+            | (Move, BorrowMut)
+            | (BorrowSh, Move)
+            | (Move, BorrowSh)
     )
 }
 
@@ -192,7 +195,6 @@ fn collect_decls(
     node: u32,
     facts: &mut Facts,
     scopes: &mut Vec<Vec<usize>>,
-    param_scope: bool,
     decl_site: &mut DeclSite,
 ) {
     let n = t.node(node);
@@ -222,7 +224,7 @@ fn collect_decls(
                     scopes.last_mut().unwrap().push(b);
                 }
             }
-            collect_decls(t, body, facts, scopes, false, decl_site);
+            collect_decls(t, body, facts, scopes, decl_site);
             scopes.pop();
         }
         Kind::Block => {
@@ -259,7 +261,7 @@ fn collect_decls(
                         // if / while 的子塊
                         for cc in t.node(c).children.clone() {
                             if matches!(t.node(cc).kind, Kind::Block | Kind::IfStmt) {
-                                collect_decls(t, cc, facts, scopes, false, decl_site);
+                                collect_decls(t, cc, facts, scopes, decl_site);
                             }
                         }
                     }
@@ -270,7 +272,6 @@ fn collect_decls(
         }
         _ => {}
     }
-    let _ = param_scope;
 }
 
 fn scan_nested_blocks(
@@ -282,7 +283,7 @@ fn scan_nested_blocks(
 ) {
     for c in t.node(node).children.clone() {
         if t.node(c).kind == Kind::Block {
-            collect_decls(t, c, facts, scopes, false, decl_site);
+            collect_decls(t, c, facts, scopes, decl_site);
         } else if t.node(c).kind == Kind::Expr {
             scan_nested_blocks(t, c, facts, scopes, decl_site);
         } else if t.node(c).kind == Kind::CallExpr {
@@ -298,18 +299,17 @@ fn scan_nested_blocks(
 
 /// 事件抽取。ctx:事件對名稱的「使用分類」。
 #[derive(Clone, Copy, PartialEq)]
-#[allow(dead_code)] // Lhs: R₀ 才有賦值;CL0 無(保留語義槽)
 enum Ctx {
-    Value,    // 讀
-    CallArg,  // 移動語義 `f(x)`
-    Lhs,      // (R₀ 才有賦值;CL0 無 — 保留)
-    Borrowed, // `&x` 內部(不另外記 read)
+    /// 普通讀取語義。
+    Value,
+    /// 呼叫實參位置:移動語義 `f(x)`。
+    CallArg,
 }
 
 fn walk_item_scope(t: &Tree, node: u32, facts: &mut Facts, scopes: &mut Vec<Vec<usize>>) {
     // 第一遍:decls(順帶建立 decl_site:節點 → 綁定索引)
     let mut decl_site: DeclSite = DeclSite::new();
-    collect_decls(t, node, facts, scopes, false, &mut decl_site);
+    collect_decls(t, node, facts, scopes, &mut decl_site);
     // 第二遍:events(需要兩遍:事件要綁定到已知 storage)。
     // P4-1a:遍行期間真正管理作用域棧(FnItem 參數層 / Block 層 / let 後註冊),
     // 並以 decl_site 定位宣告 —— 修復「事件層真空」(ORACLE-TRACE §一 發現 #1)。
@@ -602,7 +602,7 @@ impl Interval {
 pub fn intervals(facts: &Facts, track: Track) -> (Vec<Vec<Interval>>, Vec<Event>) {
     let n = facts.bindings.len();
     let mut out: Vec<Vec<Interval>> = vec![Vec::new(); n];
-    for (i, ev) in facts.events.iter().enumerate() {
+    for ev in facts.events.iter() {
         let b = ev.binding;
         let mut it = Interval {
             start: ev.span.start,
@@ -654,12 +654,10 @@ pub fn intervals(facts: &Facts, track: Track) -> (Vec<Vec<Interval>>, Vec<Event>
             }
         }
         out[b].push(it);
-        let _ = i;
     }
     (out, facts.events.clone())
 }
 
-/// 紅邊集合(§3.3 衝突圖的邊):同一綁定、區間相交、相容性被違反。
 /// 紅邊(§3.3 衝突邊):同一綁定、活躍區間相交、相容性被違反。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RedEdge {

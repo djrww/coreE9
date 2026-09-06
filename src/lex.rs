@@ -85,8 +85,6 @@ pub struct Token {
     pub span: Span,
 }
 
-const TRANSLIT: &str = "fnletmutifelsewhiletruefalse";
-
 fn keyword_of(word: &str) -> Option<TokKind> {
     match word {
         "fn" => Some(TokKind::Fn),
@@ -257,7 +255,6 @@ pub fn lex(src: &str) -> Vec<Token> {
             }
         }
     }
-    let _ = TRANSLIT; // (保留:關鍵字表來源標記)
     toks
 }
 
