@@ -26,7 +26,7 @@
 `tools/rocq_reconcile.py`(Rust 實例 ↔ Rocq 計算,kernel 複驗 19 樣本點;
 已抓出並修正 R4Runtime 尾插/頭插分歧)+ CI job `rocq`。
 
-## 〇、測試全量清單(50 具名測試)
+## 〇、測試全量清單(53 具名測試)
 
 **CL0 載體 — 九律 + 編輯單體 + 定理 + 語義面(31,`tests/laws.rs`)**
 
@@ -135,7 +135,7 @@
 | §5.3 | 配置快照(增量重析界)| `test_reuse_data_consistency` | `parse::Tree`(cfgs 欄位)| ⚠️ 工具綠 |
 | §6.3 | 判定權不轉移(rustc 面記 0)| `test_law_L8_measure_is_guaranteeing_termination` | `rep`(μ 定義)| ✅ |
 | 附錄 A | L1–L9 全矩陣 | 上表 16 條 | — | ✅ |
-| 附錄 B | R₀ EBNF(pest 機器形式,見「附錄 B」節) | §二 8 條 + pest parity 3 條 | `r0` / `src/r0.pest` | ✅ |
+| 附錄 B | pest 機器形式文法(R₀ + CL0 雙載體,見「附錄 B」節) | §一/§二 + pest parity 6 條 | `r0` / `parse` / `src/{r0,cl0}.pest` | ✅ |
 | §9 | 非目標:不重造 rustc;側條件 = 如實申報 | `r0_parse_unsupported_nodes` / `r0_unsupported_detects` | `r0::{unsupported, r0_parse}` | ✅ |
 
 ---
@@ -160,11 +160,16 @@
 
 ---
 
-## 附錄 B、R₀ EBNF(pest 機器形式,2026-09-07)
+## 附錄 B、pest 機器形式文法(R₀ + CL0 雙載體,2026-09-07)
 
-R₀ 語法的權威機器形式 = **`src/r0.pest`**(pest 2.9.1)。此前「EBNF」只散見
-於 `r0.rs` 各解析函數的註釋;P4-7 預定本附錄位置,現以 pest 文法正式落地,
-並由 parity 律證明與手寫 `r0_lex` + `r0_parse` **同面**:
+兩個載體的語法權威機器形式 = **`src/r0.pest`**(R₀)與 **`src/cl0.pest`**
+(CL0 主語言),pest 2.9.1。此前「EBNF」只散見於 `r0.rs` / `parse.rs` 各解析
+函數的註釋;P4-7 預定本附錄位置,現以 pest 文法正式落地,並各由 parity 律
+證明與手寫解柝器**同面**(接受集 + 非 Trivia token 流雙對帳)。
+
+### B.1 R₀ 載體(`src/r0.pest` × `r0_lex` + `r0_parse`)
+
+**法律面**(pest 接受集 = R₀ 無 Error/Unsupported 節點的輸入):
 
 **法律面**(pest 接受集 = R₀ 無 Error/Unsupported 節點的輸入):
 
@@ -218,6 +223,50 @@ dev-dependencies,lib 依賴恆 0):
 > 紀律:pest 文法是 EBNF 的**機器形式**,不是第二解柝器載體 —— 語義面
 > (`model.rs`)與九律仍以 `r0_parse` 為唯一輸入;若日後 P4-7 要收編 pest
 > 為正式載體,需另開項並重走全套 parity(含 totalization 面)。
+
+### B.2 CL0 載體(主語言)(`src/cl0.pest` × `lex` + `parse`)
+
+CL0 與 R₀ 的差異面(pest 文法如實反映解析器,見 `src/cl0.pest` 頭註):
+
+- 表達式**無優先級**:五運算符 `+ - * == <` 同層左結合(單 Expr 扁平);
+- **無指派語句**(`x = 5;` 非法,僅 `let x = 5;`);
+- **無括號表達式**(primary 無 LParen 臂);
+- let **無型別標註**;fn **無返回型別**;
+- 塊表達式語句**必收 `;`**(無 R₀ 的 is_block_stmt 例外);
+- 形參/實參**寬容裸逗號**(導前/雙/尾隨皆合法 —— 解析器循環 `Comma => bump`);
+- `&mut` = **兩個 token**(Amp + MutKw),一元可堆疊(`&&x` / `*&x` /
+  `&mut &mut x`);型別 = 可重複引用 `(& [mut])* IDENT`;
+- 無 struct / loop / return / 字段 / 索引 / raw string;
+- `return` **不是** CL0 關鍵字 = 普通標識字(`return;` 是合法標識字表達式)。
+
+```
+program    = { fn_item }
+fn_item    = "fn" IDENT "(" params ")" block        ; 無返回型別
+params     = { "," | param }                        ; 寬容裸逗號
+param      = IDENT [ ":" type ]
+type       = ("&" ["mut"])* IDENT
+block      = "{" { stmt } "}"
+stmt       = let | if | while | expr_stmt
+let        = "let" ["mut"] IDENT ["=" expr] ";"
+if         = "if" expr block ["else" (if | block)]
+while      = "while" expr block
+expr_stmt  = expr ";"                               ; 必收 ;
+expr       = unary { ("+" | "-" | "*" | "==" | "<") unary }*
+unary      = ("&" ["mut"] | "*")* primary
+primary    = NUMBER | "true" | "false" | IDENT [ call ] | block
+call       = "(" { "," | expr } ")"                 ; 寬容裸逗號
+```
+
+**parity 律**(`tests/pest_cl0_parity.rs`,3 條具名):
+
+| 具名測試 | 合同 |
+|---|---|
+| `test_pest_cl0_parity_matrix` | 16 手構法律案例(覆蓋寬容逗號 / 一元堆疊 / 重複引用型別 / else-if 鏈 / `return` 標識字面等生成器不觸及角落):token 流 ≡ 手寫 parse |
+| `test_pest_cl0_parity_fuzz` | 500 輪 `gen_legal` 樣本同上 |
+| `test_pest_cl0_boundary_illegal` | 8 非法形狀(括號表達式 / 指派 / let 型別 / 塊語句無 `;` / 頂層語句 / Bad token 等):CL0 產 Error ⟺ pest 失敗 |
+
+> 同上紀律:CL0 九律 / 編輯單體 / 重寫系統仍以 `parse` 為唯一輸入;
+> pest 面只證明 EBNF 機器形式的**同面性**,不改變載體分工。
 
 ## 三、誠實留白(不假裝覆蓋)
 

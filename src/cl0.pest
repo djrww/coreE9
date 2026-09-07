@@ -1,0 +1,88 @@
+// CL0 文法(pest 形)—— CL0 載體(主語言)EBNF 的機器可讀形式。
+//
+// 對帳目標:src/parse.rs 手寫 `lex` + `parse`(法律面 = 無 Error 節點的
+// 輸入;CL0 無 Unsupported,側條件一律 Error 化,pest 對同輸入同側失敗,
+// 由 tests/pest_cl0_parity.rs 邊界律實測)。
+//
+// 與 R₀ 文法(src/r0.pest)的差異面(如實反映解析器):
+//   * 表達式**無優先級**:五運算符( + - * == < )同層左結合,單 Expr 扁平;
+//   * **無指派語句**(`x = 5;` 非法,僅 `let x = 5;`);
+//   * **無括號表達式**(primary 無 LParen 臂);
+//   * let **無型別標註**;fn **無返回型別**;
+//   * 塊表達式語句**必收 `;`**(無 is_block_stmt 例外);
+//   * 形參/實參**寬容逗號**:裸逗號(導前/雙/尾隨)皆合法
+//     (解析器循環 `Comma => bump`,無後驗);
+//   * `&mut` = 兩個 token(Amp + MutKw), unary 可堆疊(`&&x` / `*&x`);
+//   * 型別 = 可重複引用: `(& [mut])* IDENT`(`&mut &int` 合法);
+//   * 無 struct / loop / return / 字段 / 索引 / raw string / `&mut` 單 token。
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" | "//" ~ (!"\n" ~ ANY)* }
+
+// ---------- 詞法(token 級,atomic)----------
+
+IDENTPART = _{ ASCII_ALPHANUMERIC | "_" }
+// 關鍵字 = 8 個有限集;標識字 = 整詞非關鍵字。
+keyword = _{ "fn" | "let" | "mut" | "if" | "else" | "while" | "true" | "false" }
+IDENT = @{ !(keyword ~ !IDENTPART) ~ (ASCII_ALPHA | "_") ~ IDENTPART* }
+NUMBER = @{ ASCII_DIGIT+ }
+
+fn_kw    = @{ "fn" ~ !IDENTPART }
+let_kw   = @{ "let" ~ !IDENTPART }
+mut_kw   = @{ "mut" ~ !IDENTPART }
+if_kw    = @{ "if" ~ !IDENTPART }
+else_kw  = @{ "else" ~ !IDENTPART }
+while_kw = @{ "while" ~ !IDENTPART }
+true_kw  = @{ "true" ~ !IDENTPART }
+false_kw = @{ "false" ~ !IDENTPART }
+
+amp    = @{ "&" }
+star   = @{ "*" }
+plus   = @{ "+" }
+minus  = @{ "-" }
+eq_eq  = @{ "==" }
+eq     = @{ "=" ~ !"=" }
+lt     = @{ "<" }
+lparen = @{ "(" }
+rparen = @{ ")" }
+lbrace = @{ "{" }
+rbrace = @{ "}" }
+semi   = @{ ";" }
+colon  = @{ ":" }
+comma  = @{ "," }
+
+// ---------- 結構 ----------
+
+program = { SOI ~ fn_item* ~ EOI }
+
+fn_item = { fn_kw ~ IDENT ~ lparen ~ params ~ rparen ~ block }
+
+// 寬容面:裸逗號(導前/雙/尾隨)皆收 —— 同解析器循環(Comma => bump)。
+params = _{ (comma | param)* }
+param = { IDENT ~ (colon ~ type_ref)? }
+
+// 型別:可重複引用,每段可帶 mut;基底 = 標識字。
+type_ref = { (amp ~ mut_kw?)* ~ IDENT }
+
+block = { lbrace ~ stmt* ~ rbrace }
+
+stmt = _{ let_stmt | if_stmt | while_stmt | expr_stmt }
+
+let_stmt = { let_kw ~ mut_kw? ~ IDENT ~ (eq ~ expr)? ~ semi }
+
+if_stmt = { if_kw ~ expr ~ block ~ (else_kw ~ (if_stmt | block))? }
+
+while_stmt = { while_kw ~ expr ~ block }
+
+// 塊表達式語句亦必收 `;`(無 R₀ 的 is_block_stmt 例外)。
+expr_stmt = { expr ~ semi }
+
+// 扁平優先級(同層五運算符,左結合;構造順序即結合)。
+expr = { unary ~ ((plus | minus | star | eq_eq | lt) ~ unary)* }
+
+// 一元可堆疊:`&&x` / `*&x` / `&mut &mut x`(mut 隨 & 成對)。
+unary = { (amp ~ mut_kw? | star)* ~ primary }
+
+primary = { NUMBER | true_kw | false_kw | IDENT ~ call? | block }
+
+// 實參寬容面同形參。
+call = { lparen ~ (comma | expr)* ~ rparen }
